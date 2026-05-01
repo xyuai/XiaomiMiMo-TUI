@@ -9,26 +9,26 @@ use crate::tui::app::App;
 pub fn lines(app: &App) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(Span::styled(
-            "API Key Setup",
+            "Token Plan API Key 配置",
             Style::default()
                 .fg(palette::XIAOMIMIMO_SKY)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "Enter your XIAOMIMIMO_API_KEY to continue.",
+            "请输入 Token Plan 套餐专属 API Key（XIAOMIMIMO_API_KEY）以继续。",
             Style::default().fg(palette::TEXT_PRIMARY),
         )),
         Line::from(Span::styled(
-            "Get your key at https://platform.xiaomimimo.com",
+            "默认专属 Base URL: https://token-plan-cn.xiaomimimo.com/v1",
             Style::default().fg(palette::XIAOMIMIMO_SKY),
         )),
         Line::from(Span::styled(
-            "Paste the full key exactly as issued (no spaces/newlines).",
+            "Anthropic 兼容地址: https://token-plan-cn.xiaomimimo.com/anthropic",
             Style::default().fg(palette::TEXT_MUTED),
         )),
         Line::from(Span::styled(
-            "Unusual-looking formats warn, but setup only blocks clearly broken input.",
+            "请完整粘贴 Key，不要包含空格或换行。",
             Style::default().fg(palette::TEXT_MUTED),
         )),
         Line::from(""),
@@ -36,12 +36,12 @@ pub fn lines(app: &App) -> Vec<Line<'static>> {
 
     let masked = mask_key(&app.api_key_input);
     let display = if masked.is_empty() {
-        "(paste key here)"
+        "（在这里粘贴 API Key）"
     } else {
         masked.as_str()
     };
     lines.push(Line::from(vec![
-        Span::styled("Key: ", Style::default().fg(palette::TEXT_MUTED)),
+        Span::styled("Key：", Style::default().fg(palette::TEXT_MUTED)),
         Span::styled(
             display.to_string(),
             Style::default()
@@ -61,7 +61,7 @@ pub fn lines(app: &App) -> Vec<Line<'static>> {
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "Press Enter to save, Esc to go back.",
+        "按 Enter 保存，按 Esc 返回。",
         Style::default().fg(palette::TEXT_MUTED),
     )));
 

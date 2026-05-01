@@ -395,9 +395,11 @@ fn command_runs_directly(name: &str) -> bool {
     matches!(
         name,
         "help"
+            | "model"
             | "clear"
             | "exit"
             | "models"
+            | "provider"
             | "queue"
             | "subagents"
             | "links"
@@ -405,6 +407,7 @@ fn command_runs_directly(name: &str) -> bool {
             | "save"
             | "sessions"
             | "compact"
+            | "cycles"
             | "export"
             | "config"
             | "yolo"
@@ -419,11 +422,13 @@ fn command_runs_directly(name: &str) -> bool {
             | "retry"
             | "init"
             | "settings"
+            | "statusline"
             | "skills"
             | "cost"
             | "jobs"
             | "mcp"
             | "task"
+            | "restore"
     )
 }
 
@@ -933,17 +938,17 @@ mod tests {
     }
 
     #[test]
-    fn command_palette_inserts_model_command_for_argument_entry() {
+    fn command_palette_runs_model_command_without_args() {
         let entries = build_entries(Path::new("."), Path::new("."), Path::new("mcp.json"), None);
         let model = entries
             .iter()
             .find(|entry| entry.section == PaletteSection::Command && entry.label == "/model")
             .expect("model command entry");
 
-        assert_eq!(model.command, "/model ");
+        assert_eq!(model.command, "/model");
         assert!(matches!(
             &model.action,
-            CommandPaletteAction::InsertText { text } if text == "/model "
+            CommandPaletteAction::ExecuteCommand { command } if command == "/model"
         ));
     }
 

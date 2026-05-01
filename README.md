@@ -9,7 +9,7 @@ XiaomiMiMo-TUI 是一个为 Xiaomi MiMo 适配的终端 TUI 客户端。
 ## 功能简介
 
 - **MiMo 对话 TUI**：在终端中使用 Xiaomi MiMo 进行多轮对话。
-- **OpenAI 兼容接口**：默认使用 Xiaomi MiMo OpenAI-compatible API，也可通过配置覆盖 Base URL。
+- **OpenAI 兼容接口**：默认使用 Xiaomi MiMo Token Plan 套餐专属 OpenAI-compatible API 与 Base URL，也可通过配置覆盖。
 - **模型配置**：默认模型为 `mimo-v2.5-pro`，可通过配置文件、环境变量或命令行切换。
 - **会话管理**：支持会话保存、恢复和历史记录。
 - **工具工作流**：保留原 TUI 架构中的工具调用、文件/命令辅助等能力。
@@ -67,7 +67,7 @@ XIAOMIMIMO_MODEL=mimo-v2.5-pro
 
 ## 发布版本
 
-当前版本：`0.5.0`
+当前版本：`0.5.1`
 
 Windows x64 Release 资产：
 

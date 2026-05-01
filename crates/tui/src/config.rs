@@ -378,7 +378,8 @@ pub struct NotificationsConfig {
     /// Only notify when the turn took at least this many seconds. Default: 30.
     #[serde(default = "default_threshold_secs")]
     pub threshold_secs: u64,
-    /// Include a short summary (elapsed time + cost) in the notification body.
+    /// Include a short summary (elapsed time + turn token count) in the
+    /// notification body.
     /// Default: `false`.
     #[serde(default)]
     pub include_summary: bool,
@@ -441,7 +442,7 @@ pub enum StatusItem {
     Mode,
     /// Model identifier (e.g. `mimo-v2.5-pro`).
     Model,
-    /// Session cost in USD ("$0.42").
+    /// Session token usage ("tok 12.3k").
     Cost,
     /// Activity label: "ready" / "draft" / "working".
     Status,
@@ -506,7 +507,7 @@ impl StatusItem {
         match self {
             StatusItem::Mode => "Mode",
             StatusItem::Model => "Model",
-            StatusItem::Cost => "Session cost",
+            StatusItem::Cost => "Session tokens",
             StatusItem::Status => "Activity (ready/draft/working)",
             StatusItem::Coherence => "Coherence interventions",
             StatusItem::Agents => "Sub-agents in flight",
@@ -526,7 +527,7 @@ impl StatusItem {
         match self {
             StatusItem::Mode => "agent · yolo · plan",
             StatusItem::Model => "the model id you'll send to",
-            StatusItem::Cost => "running USD total for this session",
+            StatusItem::Cost => "running token total for this session",
             StatusItem::Status => "what the agent is doing right now",
             StatusItem::Coherence => "shown only when the engine intervenes",
             StatusItem::Agents => "swarm in progress",
@@ -2075,13 +2076,12 @@ pub fn save_api_key(api_key: &str) -> Result<PathBuf> {
     } else {
         // Create new minimal config
         format!(
-            r#"# XiaomiMiMo TUI Configuration
-# Get your API key from https://platform.xiaomimimo.com
-# Or set XIAOMIMIMO_API_KEY environment variable
+            r#"# XiaomiMiMo-TUI 配置
+# 从 Xiaomi MiMo Token Plan 套餐获取 API Key，或设置 XIAOMIMIMO_API_KEY 环境变量
 
 api_key = "{key_to_write}"
 
-# Base URL (default: https://token-plan-cn.xiaomimimo.com/v1)
+# Token Plan 套餐专属 OpenAI-compatible Base URL（默认）
 # base_url = "https://token-plan-cn.xiaomimimo.com/v1"
 
 # Default model

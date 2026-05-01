@@ -29,7 +29,7 @@ pub struct HeaderData<'a> {
     pub total_tokens: u32,
     /// Context window size for the model (if known).
     pub context_window: Option<u32>,
-    /// Accumulated session cost in USD.
+    /// Legacy accumulated session cost kept for hooks/compat; header does not render it.
     pub session_cost: f64,
     /// Active context input tokens used for context utilization. Callers should
     /// pass a sanitized live-context estimate, not cumulative API usage.
@@ -84,7 +84,7 @@ impl<'a> HeaderData<'a> {
         self
     }
 
-    /// Set token/cost fields.
+    /// Set usage fields.
     #[must_use]
     pub fn with_usage(
         mut self,

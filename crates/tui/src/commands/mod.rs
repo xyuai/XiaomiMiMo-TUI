@@ -85,7 +85,7 @@ pub struct CommandInfo {
 
 impl CommandInfo {
     pub fn requires_argument(&self) -> bool {
-        self.usage.contains('<') || self.usage.contains('[')
+        self.usage.contains('<')
     }
 
     pub fn palette_command(&self) -> String {
@@ -375,7 +375,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         name: "cost",
         aliases: &[],
-        description: "Show session cost breakdown",
+        description: "Show session token usage",
         usage: "/cost",
     },
 ];

@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
+use tokio::time::{Duration as TokioDuration, timeout};
 
 #[test]
 fn selection_point_from_position_ignores_top_padding() {
@@ -535,6 +536,45 @@ async fn model_change_update_syncs_engine_model_before_compaction() {
     }
 }
 
+#[tokio::test]
+async fn sync_current_mode_permissions_sends_yolo_full_permission_state() {
+    let mut app = create_test_app();
+    app.allow_shell = false;
+    app.trust_mode = false;
+    app.approval_mode = crate::tui::approval::ApprovalMode::Never;
+    app.set_mode(AppMode::Yolo);
+
+    let engine = crate::core::engine::mock_engine_handle();
+    sync_current_mode_permissions(&app, &engine.handle).await;
+    let mut rx = engine.rx_op;
+
+    let received = timeout(TokioDuration::from_millis(200), rx.recv())
+        .await
+        .expect("mode op should arrive")
+        .expect("mode op");
+    match received {
+        crate::core::ops::Op::ChangeMode { mode } => assert_eq!(mode, AppMode::Yolo),
+        other => panic!("expected ChangeMode, got {other:?}"),
+    }
+
+    let received = timeout(TokioDuration::from_millis(200), rx.recv())
+        .await
+        .expect("permissions op should arrive")
+        .expect("permissions op");
+    match received {
+        crate::core::ops::Op::SetPermissions {
+            allow_shell,
+            trust_mode,
+            auto_approve,
+        } => {
+            assert!(allow_shell);
+            assert!(trust_mode);
+            assert!(auto_approve);
+        }
+        other => panic!("expected SetPermissions, got {other:?}"),
+    }
+}
+
 fn init_git_repo() -> TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
 
@@ -726,13 +766,15 @@ fn subagent_token_usage_is_deduped_by_mailbox_sequence() {
 fn format_token_count_compact_formats_units() {
     assert_eq!(format_token_count_compact(999), "999");
     assert_eq!(format_token_count_compact(1_200), "1.2k");
-    assert_eq!(format_token_count_compact(1_000_000), "1.0M");
+    assert_eq!(format_token_count_compact(128_000), "128k");
+    assert_eq!(format_token_count_compact(1_000_000), "1.00m");
+    assert_eq!(format_token_count_compact(1_390_000), "1.39m");
 }
 
 #[test]
 fn format_context_budget_caps_overflow_display() {
-    assert_eq!(format_context_budget(5_000, 128_000), "5.0k/128.0k");
-    assert_eq!(format_context_budget(250_000, 128_000), ">128.0k/128.0k");
+    assert_eq!(format_context_budget(5_000, 128_000), "5.0k/128k");
+    assert_eq!(format_context_budget(250_000, 128_000), ">128k/128k");
 }
 
 #[test]
@@ -837,7 +879,7 @@ fn footer_auxiliary_spans_show_cache_when_compact() {
     app.last_prompt_tokens = Some(48_000);
     app.last_prompt_cache_hit_tokens = Some(36_000);
     app.last_prompt_cache_miss_tokens = Some(12_000);
-    app.session_cost = 12.34;
+    app.total_tokens = 1_390_000;
 
     let compact = spans_text(&footer_auxiliary_spans(&app, 14));
     assert!(compact.contains("cache"));
@@ -845,16 +887,17 @@ fn footer_auxiliary_spans_show_cache_when_compact() {
 }
 
 #[test]
-fn footer_auxiliary_spans_show_cache_and_cost_when_roomy() {
+fn footer_auxiliary_spans_show_cache_and_tokens_when_roomy() {
     let mut app = create_test_app();
     app.last_prompt_tokens = Some(48_000);
     app.last_prompt_cache_hit_tokens = Some(36_000);
     app.last_prompt_cache_miss_tokens = Some(12_000);
-    app.session_cost = 12.34;
+    app.total_tokens = 1_390_000;
 
     let roomy = spans_text(&footer_auxiliary_spans(&app, 32));
     assert!(roomy.contains("cache hit 75%"));
-    assert!(roomy.contains("$12.34"));
+    assert!(roomy.contains("tok 1.39m"));
+    assert!(!roomy.contains('$'));
     assert!(
         !roomy.contains("ctx"),
         "context % removed from footer — shown in header only"
@@ -3009,13 +3052,14 @@ fn render_footer_from_with_default_items_renders_mode_and_model() {
     // Default footer composition should show the mode chip and model
     // identifier — whatever the configured default model is.
     let mut app = create_test_app();
-    app.session_cost = 0.42;
+    app.total_tokens = 1_390_000;
     let items = crate::config::StatusItem::default_footer();
     let props = render_footer_from(&app, &items, None);
     assert_eq!(props.mode_label, "agent");
     assert!(!props.model.is_empty(), "footer should show a model name");
-    // Cost chip is included whenever cost > 0.001.
+    // Cost status item now shows token usage.
     assert!(!props.cost.is_empty());
+    assert_eq!(spans_text(&props.cost), "tok 1.39m");
 }
 
 #[test]
@@ -3023,7 +3067,7 @@ fn render_footer_from_with_empty_items_blanks_every_segment() {
     // A user who toggles every chip OFF should get a bare footer (no model
     // text, no cost, no auxiliary chips). This is the explicit-empty case.
     let mut app = create_test_app();
-    app.session_cost = 1.5;
+    app.total_tokens = 1_390_000;
     let props = render_footer_from(&app, &[], None);
     assert_eq!(props.mode_label, "");
     assert!(props.model.is_empty());
@@ -3035,9 +3079,10 @@ fn render_footer_from_with_empty_items_blanks_every_segment() {
 
 #[test]
 fn render_footer_from_drops_only_unselected_clusters() {
-    // Toggling Cost off but keeping the rest should hide cost only.
+    // Toggling Cost off but keeping the rest should hide the token usage chip
+    // only.
     let mut app = create_test_app();
-    app.session_cost = 0.42;
+    app.total_tokens = 1_390_000;
     let items: Vec<crate::config::StatusItem> = crate::config::StatusItem::default_footer()
         .into_iter()
         .filter(|item| *item != crate::config::StatusItem::Cost)
@@ -3047,15 +3092,14 @@ fn render_footer_from_drops_only_unselected_clusters() {
     assert!(!props.model.is_empty(), "footer should show a model name");
     assert!(
         props.cost.is_empty(),
-        "cost cluster should be empty when Cost is disabled"
+        "token usage cluster should be empty when Cost is disabled"
     );
 }
 
-/// Regression for issue #244: visible session spend must not decrease.
+/// Regression for issue #244: legacy session spend telemetry must not decrease.
 /// Sub-agent token usage events arrive out of order and may be reconciled
 /// later (cache adjustments, provisional → final swap). The displayed total
-/// is anchored to a high-water mark so users never see a number go down
-/// during a single session.
+/// is anchored to a high-water mark for hooks/telemetry compatibility.
 #[test]
 fn displayed_session_cost_is_monotonic_under_negative_reconciliation() {
     let mut app = create_test_app();

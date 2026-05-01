@@ -45,8 +45,8 @@ pub struct FooterProps {
     pub reasoning_replay: Vec<Span<'static>>,
     /// Cache-hit-rate chip spans (empty when no usage reported).
     pub cache: Vec<Span<'static>>,
-    /// Session-cost chip spans (empty when below the display threshold).
-    /// Rendered in the left cluster (after the model name) — cost is steady
+    /// Session token-usage chip spans (empty when no tokens are recorded).
+    /// Rendered in the left cluster (after the model name); usage is steady
     /// info, not a transient signal, so it lives with mode and model.
     pub cost: Vec<Span<'static>>,
     /// Optional toast that, when present, replaces the left status line.
@@ -270,15 +270,18 @@ impl FooterWidget {
     ///
     /// Priority order (highest to lowest — last to drop):
     /// 1. Mode label (always visible at any width; truncated only as a last resort)
-    /// 2. Model name (always visible; then truncated mid-word once status & cost are gone)
-    /// 3. Cost chip — drops second after status (steady-info still wants to be visible)
-    /// 4. Status label (e.g. "working", "draft") — drops first when space is tight
+    /// 2. Model name (always visible; then truncated mid-word once status &
+    ///    token usage are gone)
+    /// 3. Token usage chip - drops second after status (steady-info still
+    ///    wants to be visible)
+    /// 4. Status label (e.g. "working", "draft") — drops first when space is
+    ///    tight
     ///
     /// At every width ≥40 cols the line never wraps mid-hint: the widget
-    /// chooses one of (`mode · model · cost · status`, `mode · model · cost`,
-    /// `mode · model`, `mode`) and renders that single line within
-    /// `max_width`. Cost lives between model and status so the eye finds
-    /// "what's this run going to cost me" without scanning past the wave.
+    /// chooses one of (`mode / model / tokens / status`, `mode / model /
+    /// tokens`, `mode / model`, `mode`) and renders that single line within
+    /// `max_width`. Token usage lives between model and status so it is visible
+    /// without scanning past the wave.
     fn status_line_spans(&self, max_width: usize) -> Vec<Span<'static>> {
         if max_width == 0 {
             return Vec::new();
@@ -901,7 +904,7 @@ mod tests {
         assert!(!line.contains("working"), "status dropped: {line:?}");
     }
 
-    fn props_with_status_and_cost(state: &str, cost: &str) -> FooterProps {
+    fn props_with_status_and_tokens(state: &str, tokens: &str) -> FooterProps {
         let app = make_app();
         FooterProps::from_app(
             &app,
@@ -912,38 +915,39 @@ mod tests {
             Vec::<Span<'static>>::new(),
             Vec::<Span<'static>>::new(),
             Vec::<Span<'static>>::new(),
-            vec![Span::styled(cost.to_string(), Style::default())],
+            vec![Span::styled(tokens.to_string(), Style::default())],
         )
     }
 
-    /// v0.6.6 redesign — cost lives on the LEFT, between model and status.
-    /// At wide widths the line reads `mode · model · cost · status`.
+    /// Token usage lives on the LEFT, between model and status.
+    /// At wide widths the line reads `mode · model · tokens · status`.
     #[test]
-    fn footer_cost_renders_in_left_cluster_at_wide_widths() {
-        let props = props_with_status_and_cost("working", "$0.42");
+    fn footer_tokens_render_in_left_cluster_at_wide_widths() {
+        let props = props_with_status_and_tokens("working", "tok 1.39m");
         let line = render_at_width(props, 120);
         let mode_pos = line.find("agent").expect("mode visible");
         let model_pos = line.find("mimo-v2-flash").expect("model visible");
-        let cost_pos = line.find("$0.42").expect("cost visible on left");
+        let tokens_pos = line.find("tok 1.39m").expect("tokens visible on left");
         let status_pos = line.find("working").expect("status visible");
         assert!(mode_pos < model_pos);
-        assert!(model_pos < cost_pos, "cost must follow model: {line:?}");
-        assert!(cost_pos < status_pos, "cost must precede status: {line:?}");
+        assert!(model_pos < tokens_pos, "tokens must follow model: {line:?}");
+        assert!(
+            tokens_pos < status_pos,
+            "tokens must precede status: {line:?}"
+        );
     }
 
-    /// Cost is preserved when status drops — cost is steady info, status is
+    /// Token usage is preserved when status drops; tokens are steady info, status is
     /// a transient signal.
     #[test]
-    fn footer_cost_outranks_status_when_space_tight() {
-        // "agent · mimo-v2-flash · $0.42 · refreshing context" = 53 cols.
-        // At 47 the status drops but the cost survives (47 ≥ 36 mode+model+cost).
-        let props = props_with_status_and_cost("refreshing context", "$0.42");
+    fn footer_tokens_outrank_status_when_space_tight() {
+        let props = props_with_status_and_tokens("refreshing context", "tok 1.39m");
         let line = render_at_width(props, 47);
         assert!(line.contains("agent"));
         assert!(line.contains("mimo-v2-flash"));
         assert!(
-            line.contains("$0.42"),
-            "cost survives status drop: {line:?}"
+            line.contains("tok 1.39m"),
+            "tokens survive status drop: {line:?}"
         );
         assert!(!line.contains("refreshing"), "status dropped: {line:?}");
     }

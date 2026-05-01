@@ -8,35 +8,35 @@ use crate::palette;
 pub fn lines() -> Vec<Line<'static>> {
     vec![
         Line::from(Span::styled(
-            "XiaomiMiMo TUI",
+            "XiaomiMiMo-TUI",
             Style::default()
                 .fg(palette::XIAOMIMIMO_BLUE)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
-            format!("Version {}", env!("CARGO_PKG_VERSION")),
+            format!("版本 {}", env!("CARGO_PKG_VERSION")),
             Style::default().fg(palette::TEXT_MUTED),
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "A focused terminal workspace for longer model sessions.",
+            "面向 Xiaomi MiMo 的终端工作区。",
             Style::default().fg(palette::TEXT_PRIMARY),
         )),
         Line::from(Span::styled(
-            "You'll add an API key, review trust for this directory, and then land in the chat.",
+            "接下来会填写 API Key、确认工作区信任，然后进入对话。",
             Style::default().fg(palette::TEXT_MUTED),
         )),
         Line::from(Span::styled(
-            "The main composer is multi-line, so you can write full prompts instead of squeezing everything into one line.",
+            "默认使用 Token Plan 套餐专属 API 与 Base URL：https://token-plan-cn.xiaomimimo.com/v1",
             Style::default().fg(palette::TEXT_MUTED),
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "Press Enter to continue.",
+            "按 Enter 继续。",
             Style::default().fg(palette::TEXT_PRIMARY),
         )),
         Line::from(Span::styled(
-            "Ctrl+C exits at any point.",
+            "随时按 Ctrl+C 退出。",
             Style::default().fg(palette::TEXT_MUTED),
         )),
     ]

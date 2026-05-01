@@ -720,7 +720,7 @@ async fn run_event_loop(
                             app.status_message = Some(format!("Turn failed: {error}"));
                         }
 
-                        // Update session cost
+                        // Keep legacy cost telemetry internally, but the UI surfaces token usage.
                         let turn_cost =
                             crate::pricing::calculate_turn_cost_from_usage(&app.model, &usage);
                         if let Some(cost) = turn_cost {
@@ -742,12 +742,11 @@ async fn run_event_loop(
                             let msg = if notif.include_summary {
                                 let human =
                                     crate::tui::notifications::humanize_duration(turn_elapsed);
-                                match turn_cost {
-                                    Some(c) => {
-                                        format!("xiaomimimo: turn complete ({human}, ${c:.2})")
-                                    }
-                                    None => format!("xiaomimimo: turn complete ({human})"),
-                                }
+                                let token_label =
+                                    format_token_count_compact(u64::from(turn_tokens));
+                                format!(
+                                    "xiaomimimo: turn complete ({human}, {token_label} tokens)"
+                                )
                             } else {
                                 "xiaomimimo: turn complete".to_string()
                             };
@@ -1572,6 +1571,7 @@ async fn run_event_loop(
                         app.status_message = Some("Sidebar focus: plan".to_string());
                     } else {
                         app.set_mode(AppMode::Plan);
+                        sync_current_mode_permissions(app, &engine_handle).await;
                     }
                     continue;
                 }
@@ -1581,6 +1581,7 @@ async fn run_event_loop(
                         app.status_message = Some("Sidebar focus: todos".to_string());
                     } else {
                         app.set_mode(AppMode::Agent);
+                        sync_current_mode_permissions(app, &engine_handle).await;
                     }
                     continue;
                 }
@@ -1590,6 +1591,7 @@ async fn run_event_loop(
                         app.status_message = Some("Sidebar focus: tasks".to_string());
                     } else {
                         app.set_mode(AppMode::Yolo);
+                        sync_current_mode_permissions(app, &engine_handle).await;
                     }
                     continue;
                 }
@@ -1840,6 +1842,7 @@ async fn run_event_loop(
                     }
                     let prior_model = app.model.clone();
                     app.cycle_mode();
+                    sync_current_mode_permissions(app, &engine_handle).await;
                     if app.model != prior_model {
                         let _ = engine_handle
                             .send(Op::SetModel {
@@ -2047,32 +2050,39 @@ async fn run_event_loop(
                         _ => AppMode::Plan,
                     };
                     app.set_mode(new_mode);
+                    sync_current_mode_permissions(app, &engine_handle).await;
                 }
                 KeyCode::Char('v') if is_paste_shortcut(&key) => {
                     app.paste_from_clipboard();
                 }
                 KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::ALT) => {
                     app.set_mode(AppMode::Agent);
+                    sync_current_mode_permissions(app, &engine_handle).await;
                     continue;
                 }
                 KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::ALT) => {
                     app.set_mode(AppMode::Yolo);
+                    sync_current_mode_permissions(app, &engine_handle).await;
                     continue;
                 }
                 KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::ALT) => {
                     app.set_mode(AppMode::Plan);
+                    sync_current_mode_permissions(app, &engine_handle).await;
                     continue;
                 }
                 KeyCode::Char('A') if key.modifiers.contains(KeyModifiers::ALT) => {
                     app.set_mode(AppMode::Agent);
+                    sync_current_mode_permissions(app, &engine_handle).await;
                     continue;
                 }
                 KeyCode::Char('Y') if key.modifiers.contains(KeyModifiers::ALT) => {
                     app.set_mode(AppMode::Yolo);
+                    sync_current_mode_permissions(app, &engine_handle).await;
                     continue;
                 }
                 KeyCode::Char('P') if key.modifiers.contains(KeyModifiers::ALT) => {
                     app.set_mode(AppMode::Plan);
+                    sync_current_mode_permissions(app, &engine_handle).await;
                     continue;
                 }
                 KeyCode::Char('v') | KeyCode::Char('V')
@@ -2427,17 +2437,17 @@ enum ApiKeyValidation {
 fn validate_api_key_for_onboarding(api_key: &str) -> ApiKeyValidation {
     let trimmed = api_key.trim();
     if trimmed.is_empty() {
-        return ApiKeyValidation::Reject("API key cannot be empty.".to_string());
+        return ApiKeyValidation::Reject("API Key 不能为空。".to_string());
     }
     if trimmed.contains(char::is_whitespace) {
         return ApiKeyValidation::Reject(
-            "API key appears malformed (contains whitespace).".to_string(),
+            "API Key 格式异常（包含空白字符）。".to_string(),
         );
     }
     if trimmed.len() < 16 {
         return ApiKeyValidation::Accept {
             warning: Some(
-                "API key looks short. Double-check it, but unusual formats are allowed."
+                "API Key 看起来较短，请确认已完整复制；特殊格式仍允许继续。"
                     .to_string(),
             ),
         };
@@ -2445,7 +2455,7 @@ fn validate_api_key_for_onboarding(api_key: &str) -> ApiKeyValidation {
     if !trimmed.contains('-') {
         return ApiKeyValidation::Accept {
             warning: Some(
-                "API key format looks unusual. Check that the full key was copied.".to_string(),
+                "API Key 格式看起来不常见，请确认已复制完整 Key。".to_string(),
             ),
         };
     }
@@ -2567,7 +2577,7 @@ async fn dispatch_user_message(
             reasoning_effort: app.reasoning_effort.api_value().map(str::to_string),
             allow_shell: app.allow_shell,
             trust_mode: app.trust_mode,
-            auto_approve: app.mode == AppMode::Yolo,
+            auto_approve: app.approval_mode == ApprovalMode::Auto || app.mode == AppMode::Yolo,
         })
         .await?;
 
@@ -2586,6 +2596,34 @@ async fn apply_model_and_compaction_update(
     let _ = engine_handle
         .send(Op::SetCompaction { config: compaction })
         .await;
+}
+
+async fn sync_mode_and_permissions(
+    engine_handle: &EngineHandle,
+    mode: AppMode,
+    allow_shell: bool,
+    trust_mode: bool,
+    auto_approve: bool,
+) {
+    let _ = engine_handle.send(Op::ChangeMode { mode }).await;
+    let _ = engine_handle
+        .send(Op::SetPermissions {
+            allow_shell,
+            trust_mode,
+            auto_approve,
+        })
+        .await;
+}
+
+async fn sync_current_mode_permissions(app: &App, engine_handle: &EngineHandle) {
+    sync_mode_and_permissions(
+        engine_handle,
+        app.mode,
+        app.allow_shell,
+        app.trust_mode,
+        app.approval_mode == ApprovalMode::Auto || app.mode == AppMode::Yolo,
+    )
+    .await;
 }
 
 /// Apply the choice made in the `/model` picker (#39): mutate App state so
@@ -3103,6 +3141,21 @@ async fn apply_command_result(
             AppAction::UpdateCompaction(compaction) => {
                 apply_model_and_compaction_update(engine_handle, compaction).await;
             }
+            AppAction::SyncModeAndPermissions {
+                mode,
+                allow_shell,
+                trust_mode,
+                auto_approve,
+            } => {
+                sync_mode_and_permissions(
+                    engine_handle,
+                    mode,
+                    allow_shell,
+                    trust_mode,
+                    auto_approve,
+                )
+                .await;
+            }
             AppAction::OpenConfigView => {
                 if app.view_stack.top_kind() != Some(ModalKind::Config) {
                     app.view_stack.push(ConfigView::new_for_app(app));
@@ -3146,7 +3199,9 @@ async fn apply_command_result(
                     mode: Some(task_mode_label(app.mode).to_string()),
                     allow_shell: Some(app.allow_shell),
                     trust_mode: Some(app.trust_mode),
-                    auto_approve: Some(app.approval_mode == ApprovalMode::Auto),
+                    auto_approve: Some(
+                        app.approval_mode == ApprovalMode::Auto || app.mode == AppMode::Yolo,
+                    ),
                 };
                 match task_manager.add_task(request).await {
                     Ok(task) => {
@@ -3540,6 +3595,7 @@ async fn apply_plan_choice(
     match choice {
         PlanChoice::AcceptAgent => {
             app.set_mode(AppMode::Agent);
+            sync_current_mode_permissions(app, engine_handle).await;
             app.add_message(HistoryCell::System {
                 content: "Plan accepted. Switching to Agent mode and starting implementation."
                     .to_string(),
@@ -3555,6 +3611,7 @@ async fn apply_plan_choice(
         }
         PlanChoice::AcceptYolo => {
             app.set_mode(AppMode::Yolo);
+            sync_current_mode_permissions(app, engine_handle).await;
             app.add_message(HistoryCell::System {
                 content: "Plan accepted. Switching to YOLO mode and starting implementation."
                     .to_string(),
@@ -3576,6 +3633,7 @@ async fn apply_plan_choice(
         }
         PlanChoice::ExitPlan => {
             app.set_mode(AppMode::Agent);
+            sync_current_mode_permissions(app, engine_handle).await;
             app.add_message(HistoryCell::System {
                 content: "Exited Plan mode. Switched to Agent mode.".to_string(),
             });
@@ -4046,6 +4104,21 @@ async fn handle_view_events(
                     match action {
                         AppAction::UpdateCompaction(compaction) => {
                             apply_model_and_compaction_update(engine_handle, compaction).await;
+                        }
+                        AppAction::SyncModeAndPermissions {
+                            mode,
+                            allow_shell,
+                            trust_mode,
+                            auto_approve,
+                        } => {
+                            sync_mode_and_permissions(
+                                engine_handle,
+                                mode,
+                                allow_shell,
+                                trust_mode,
+                                auto_approve,
+                            )
+                            .await;
                         }
                         AppAction::OpenConfigView => {}
                         _ => {}
@@ -4956,10 +5029,10 @@ fn render_footer_from(
     } else {
         Vec::new()
     };
-    let displayed_cost = app.displayed_session_cost();
-    let cost = if has(S::Cost) && displayed_cost > 0.001 {
+    let displayed_tokens = u64::from(app.total_tokens);
+    let cost = if has(S::Cost) && displayed_tokens > 0 {
         vec![Span::styled(
-            format!("${displayed_cost:.2}"),
+            format!("tok {}", format_token_count_compact(displayed_tokens)),
             Style::default().fg(palette::TEXT_MUTED),
         )]
     } else {
@@ -5046,15 +5119,15 @@ fn footer_auxiliary_spans(app: &App, max_width: usize) -> Vec<Span<'static>> {
     // Context % is already shown in the header signal bar — don't
     // duplicate it in the footer. The footer carries unique info only:
     // coherence, in-flight sub-agents, reasoning replay tokens, cache hit
-    // rate, and session cost.
+    // rate, and session token usage.
     let coherence_spans = footer_coherence_spans(app);
     let agents_spans = crate::tui::widgets::footer_agents_chip(running_agent_count(app));
     let replay_spans = footer_reasoning_replay_spans(app);
     let cache_spans = footer_cache_spans(app);
-    let displayed_cost = app.displayed_session_cost();
-    let cost_spans = if displayed_cost > 0.001 {
+    let displayed_tokens = u64::from(app.total_tokens);
+    let cost_spans = if displayed_tokens > 0 {
         vec![Span::styled(
-            format!("${displayed_cost:.2}"),
+            format!("tok {}", format_token_count_compact(displayed_tokens)),
             Style::default().fg(palette::TEXT_MUTED),
         )]
     } else {
@@ -5252,9 +5325,14 @@ fn footer_mode_style(app: &App) -> (&'static str, ratatui::style::Color) {
 
 fn format_token_count_compact(tokens: u64) -> String {
     if tokens >= 1_000_000 {
-        format!("{:.1}M", tokens as f64 / 1_000_000.0)
+        format!("{:.2}m", tokens as f64 / 1_000_000.0)
     } else if tokens >= 1_000 {
-        format!("{:.1}k", tokens as f64 / 1_000.0)
+        let value = tokens as f64 / 1_000.0;
+        if value >= 100.0 {
+            format!("{value:.0}k")
+        } else {
+            format!("{value:.1}k")
+        }
     } else {
         tokens.to_string()
     }

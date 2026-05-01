@@ -1,6 +1,6 @@
 #![allow(clippy::items_after_test_module)]
 
-//! Debug commands: tokens, cost, system, context, undo, retry
+//! Debug commands: tokens, usage, system, context, undo, retry
 
 use super::CommandResult;
 use crate::compaction::estimate_input_tokens_conservative;
@@ -44,13 +44,12 @@ pub fn tokens(app: &mut App) -> CommandResult {
 
     CommandResult::message(format!(
         "Token Usage:\n\
-         ─────────────────────────────\n\
+         -----------------------------\n\
          Active context:        {}\n\
          Last API input:        {} (turn telemetry; may count repeated prefix across tool rounds)\n\
          Last API output:       {}\n\
-         Cache hit/miss:        {} (telemetry/cost only)\n\
+         Cache hit/miss:        {} (telemetry only)\n\
          Cumulative tokens:     {} (session usage telemetry)\n\
-         Approx session cost:   ${:.4}\n\
          API messages:          {}\n\
          Chat messages:         {}\n\
          Model:                 {}",
@@ -59,24 +58,26 @@ pub fn tokens(app: &mut App) -> CommandResult {
         token_count(app.last_completion_tokens),
         cache_summary(app),
         app.total_tokens,
-        app.session_cost,
         message_count,
         chat_count,
         app.model,
     ))
 }
 
-/// Show session cost breakdown
+/// Show session token usage (legacy /cost alias).
 pub fn cost(app: &mut App) -> CommandResult {
     CommandResult::message(format!(
-        "Session Cost:\n\
-         ─────────────────────────────\n\
-         Approx total spent: ${:.4}\n\n\
-         Cost estimates are approximate and use provider usage telemetry when available.\n\n\
-         XiaomiMiMo API Pricing:\n\
-         ─────────────────────────────\n\
-         Pricing details are not configured in this CLI.",
-        app.session_cost,
+        "Session Tokens:\n\
+         -----------------------------\n\
+         Cumulative tokens:     {}\n\
+         Last API input:        {}\n\
+         Last API output:       {}\n\
+         Active context:        {}\n\n\
+         Token usage is shown instead of dollar estimates in XiaomiMiMo-TUI.",
+        app.total_tokens,
+        token_count(app.last_prompt_tokens),
+        token_count(app.last_completion_tokens),
+        active_context_summary(app),
     ))
 }
 
@@ -181,23 +182,23 @@ mod tests {
         assert!(msg.contains("Cache hit/miss:"));
         assert!(msg.contains("70 hit / 30 miss"));
         assert!(msg.contains("Cumulative tokens:"));
-        assert!(msg.contains("Approx session cost:"));
+        assert!(!msg.contains("Approx session cost:"));
         assert!(msg.contains("API messages:"));
         assert!(msg.contains("Chat messages:"));
         assert!(msg.contains("Model:"));
     }
 
     #[test]
-    fn test_cost_shows_spending_info() {
+    fn test_cost_shows_token_info() {
         let mut app = create_test_app();
         app.session_cost = 0.1234;
         let result = cost(&mut app);
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("Session Cost"));
-        assert!(msg.contains("Approx total spent:"));
-        assert!(msg.contains("approximate"));
-        assert!(msg.contains("$0.1234"));
+        assert!(msg.contains("Session Tokens"));
+        assert!(msg.contains("Cumulative tokens:"));
+        assert!(msg.contains("Token usage"));
+        assert!(!msg.contains("$"));
     }
 
     #[test]

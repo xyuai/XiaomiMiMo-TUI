@@ -27,6 +27,15 @@ pub fn status_line(_app: &mut App) -> CommandResult {
     CommandResult::action(AppAction::OpenStatusPicker)
 }
 
+fn sync_mode_permissions_action(app: &App) -> AppAction {
+    AppAction::SyncModeAndPermissions {
+        mode: app.mode,
+        allow_shell: app.allow_shell,
+        trust_mode: app.trust_mode,
+        auto_approve: app.approval_mode == ApprovalMode::Auto || app.mode == AppMode::Yolo,
+    }
+}
+
 /// Persist `tui.status_items` to `~/.xiaomimimo/config.toml` without disturbing
 /// the rest of the file. We round-trip through `toml::Value` so any keys we
 /// don't know about (provider blocks, MCP, etc.) survive the write
@@ -147,7 +156,10 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
             return match mode {
                 Some(m) => {
                     app.approval_mode = m;
-                    CommandResult::message(format!("approval_mode = {}", m.label()))
+                    CommandResult::with_message_and_action(
+                        format!("approval_mode = {}", m.label()),
+                        sync_mode_permissions_action(app),
+                    )
                 }
                 None => CommandResult::error(
                     "Invalid approval_mode. Use: auto, suggest/on-request/untrusted, never",
@@ -244,6 +256,7 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
         "default_mode" | "mode" => {
             let mode = AppMode::from_setting(&settings.default_mode);
             app.set_mode(mode);
+            action = Some(sync_mode_permissions_action(app));
         }
         "max_history" | "history" => {
             app.max_input_history = settings.max_input_history;
@@ -324,26 +337,36 @@ pub fn set_config(app: &mut App, args: Option<&str>) -> CommandResult {
 /// Enable YOLO mode (shell + trust + auto-approve)
 pub fn yolo(app: &mut App) -> CommandResult {
     app.set_mode(AppMode::Yolo);
-    CommandResult::message("YOLO mode enabled - shell + trust + auto-approve!")
+    CommandResult::with_message_and_action(
+        "已切换到 YOLO 模式：Shell、工作区信任和自动批准已启用。",
+        sync_mode_permissions_action(app),
+    )
 }
 
 /// Legacy alias for the removed normal mode.
 pub fn normal_mode(app: &mut App) -> CommandResult {
     app.set_mode(AppMode::Agent);
-    CommandResult::message("Normal mode was removed. Switched to Agent mode.")
+    CommandResult::with_message_and_action(
+        "普通模式已移除，已切换到 Agent 模式。",
+        sync_mode_permissions_action(app),
+    )
 }
 
 /// Enable agent mode (autonomous tool use with approvals)
 pub fn agent_mode(app: &mut App) -> CommandResult {
     app.set_mode(AppMode::Agent);
-    CommandResult::message("Agent mode enabled.")
+    CommandResult::with_message_and_action(
+        "已切换到 Agent 模式。",
+        sync_mode_permissions_action(app),
+    )
 }
 
 /// Enable plan mode (tool planning, then choose execution route)
 pub fn plan_mode(app: &mut App) -> CommandResult {
     app.set_mode(AppMode::Plan);
-    CommandResult::message(
-        "Plan mode enabled. Describe your goal and I will create a plan before execution.",
+    CommandResult::with_message_and_action(
+        "已切换到 Plan 模式。描述目标后会先生成计划，再执行。",
+        sync_mode_permissions_action(app),
     )
 }
 
@@ -367,14 +390,17 @@ pub fn trust(app: &mut App, arg: Option<&str>) -> CommandResult {
         "" | "status" | "list" => trust_status(&workspace, app, sub == "list"),
         "on" | "enable" | "yes" | "y" => {
             app.trust_mode = true;
-            CommandResult::message(
-                "Workspace trust mode enabled — agent file tools can now read/write any path. \
-                 Use `/trust off` to revert; prefer `/trust add <path>` for a narrower opt-in.",
+            CommandResult::with_message_and_action(
+                "工作区信任模式已启用。可用 `/trust off` 恢复；更精细的授权建议使用 `/trust add <path>`。",
+                sync_mode_permissions_action(app),
             )
         }
         "off" | "disable" | "no" | "n" => {
             app.trust_mode = false;
-            CommandResult::message("Workspace trust mode disabled.")
+            CommandResult::with_message_and_action(
+                "工作区信任模式已关闭。",
+                sync_mode_permissions_action(app),
+            )
         }
         "add" => trust_add(&workspace, rest),
         "remove" | "rm" | "del" | "delete" => trust_remove(&workspace, rest),
@@ -747,7 +773,7 @@ mod tests {
         assert!(!app.trust_mode);
         let result = trust(&mut app, Some("on"));
         let msg = result.message.expect("message");
-        assert!(msg.contains("Workspace trust mode enabled"));
+        assert!(msg.contains("trust off") || msg.contains("信任模式"));
         assert!(app.trust_mode);
     }
 

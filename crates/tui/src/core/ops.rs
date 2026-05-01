@@ -47,6 +47,13 @@ pub enum Op {
     #[allow(dead_code)]
     ChangeMode { mode: AppMode },
 
+    /// Update live permission flags after mode/config changes.
+    SetPermissions {
+        allow_shell: bool,
+        trust_mode: bool,
+        auto_approve: bool,
+    },
+
     /// Update the model being used
     #[allow(dead_code)]
     SetModel { model: String },

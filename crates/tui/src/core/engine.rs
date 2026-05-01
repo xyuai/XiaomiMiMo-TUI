@@ -1479,9 +1479,29 @@ impl Engine {
                     let _ = self.tx_event.send(Event::AgentList { agents }).await;
                 }
                 Op::ChangeMode { mode } => {
+                    self.refresh_system_prompt(mode);
+                    self.emit_session_updated().await;
                     let _ = self
                         .tx_event
                         .send(Event::status(format!("Mode changed to: {mode:?}")))
+                        .await;
+                }
+                Op::SetPermissions {
+                    allow_shell,
+                    trust_mode,
+                    auto_approve,
+                } => {
+                    self.session.allow_shell = allow_shell;
+                    self.config.allow_shell = allow_shell;
+                    self.session.trust_mode = trust_mode;
+                    self.config.trust_mode = trust_mode;
+                    self.session.auto_approve = auto_approve;
+                    let _ = self
+                        .tx_event
+                        .send(Event::status(format!(
+                            "Permissions updated: shell={allow_shell}, trust={trust_mode}, \
+                             auto_approve={auto_approve}"
+                        )))
                         .await;
                 }
                 Op::SetModel { model } => {
@@ -2241,12 +2261,7 @@ impl Engine {
         }
 
         if mode == AppMode::Yolo {
-            ctx.with_elevated_sandbox_policy(crate::sandbox::SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![self.session.workspace.clone()],
-                network_access: true,
-                exclude_tmpdir: false,
-                exclude_slash_tmp: false,
-            })
+            ctx.with_elevated_sandbox_policy(crate::sandbox::SandboxPolicy::DangerFullAccess)
         } else {
             ctx
         }

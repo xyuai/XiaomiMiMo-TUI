@@ -42,13 +42,13 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         let (step, total) = onboarding_step(app);
         let panel = Block::default()
             .title(Line::from(Span::styled(
-                " XiaomiMiMo TUI ",
+                " XiaomiMiMo-TUI ",
                 Style::default()
                     .fg(palette::XIAOMIMIMO_BLUE)
                     .add_modifier(Modifier::BOLD),
             )))
             .title_bottom(Line::from(Span::styled(
-                format!(" Step {step}/{total} "),
+                format!(" 步骤 {step}/{total} "),
                 Style::default()
                     .fg(palette::TEXT_MUTED)
                     .add_modifier(Modifier::BOLD),
@@ -97,26 +97,26 @@ pub fn tips_lines() -> Vec<ratatui::text::Line<'static>> {
 
     vec![
         Line::from(Span::styled(
-            "Start Simple",
+            "快速开始",
             Style::default()
                 .fg(palette::XIAOMIMIMO_SKY)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(Span::raw(
-            "Write the task in plain language. Use /help or Ctrl+K when you want a command.",
+            "直接用自然语言描述任务。需要命令时按 Ctrl+K 或输入 /help。",
         )),
         Line::from(Span::raw(
-            "The bottom composer is multi-line: Enter sends, Alt+Enter or Ctrl+J adds a new line.",
+            "底部输入框支持多行：Enter 发送，Alt+Enter 或 Ctrl+J 换行。",
         )),
         Line::from(Span::raw(
-            "Switch modes only when the job changes: Plan for review-first work, Agent for execution, YOLO when you want auto-approval.",
+            "模式按任务选择：Plan 先规划，Agent 执行，YOLO 自动批准。",
         )),
         Line::from(Span::raw(
-            "Ctrl+R resumes earlier sessions, and Esc backs out of the current draft or overlay.",
+            "Ctrl+R 可恢复历史会话，Esc 可退出当前草稿或弹窗。",
         )),
         Line::from(vec![
-            Span::styled("Press ", Style::default().fg(palette::TEXT_MUTED)),
+            Span::styled("按 ", Style::default().fg(palette::TEXT_MUTED)),
             Span::styled(
                 "Enter",
                 Style::default()
@@ -124,7 +124,7 @@ pub fn tips_lines() -> Vec<ratatui::text::Line<'static>> {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                " to open the workspace",
+                " 打开工作区",
                 Style::default().fg(palette::TEXT_MUTED),
             ),
         ]),

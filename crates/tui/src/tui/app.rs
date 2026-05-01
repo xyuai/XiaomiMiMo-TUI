@@ -512,10 +512,9 @@ pub struct App {
     /// swarms keep updating their *own* card even when the user starts a
     /// second fanout in parallel. Pruned by `prune_history_state_after_clear`.
     pub swarm_card_index: HashMap<String, usize>,
-    /// Highest cumulative session cost ever displayed. Used to keep the
-    /// footer cost monotonic across reconciliation events: provisional
-    /// estimates can be revised, but the visible total never decreases
-    /// during a single session unless explicitly reset (#244).
+    /// Highest cumulative session cost retained for legacy hooks/telemetry
+    /// during a single session unless explicitly reset (#244). The visible
+    /// footer now renders token usage instead of dollar estimates.
     pub displayed_cost_high_water: f64,
     /// Most recently observed sub-agent dispatch tool name (set on
     /// `ToolCallStarted` for `agent_spawn` / `agent_swarm` / etc., cleared
@@ -574,7 +573,7 @@ pub struct App {
     pub mcp_restart_required: bool,
     /// Tool execution log
     pub tool_log: Vec<String>,
-    /// Session cost tracking
+    /// Legacy session cost tracking for telemetry/hooks
     pub session_cost: f64,
     /// Running cost from active sub-agents (updated live via mailbox).
     pub subagent_cost: f64,
@@ -1198,8 +1197,8 @@ impl App {
         }
     }
 
-    /// Add `delta` to the parent-turn session cost and bump the displayed
-    /// high-water mark so the footer total never reverses (#244).
+    /// Add `delta` to the parent-turn legacy session cost and bump the
+    /// high-water mark retained for telemetry/hooks (#244).
     pub fn accrue_session_cost(&mut self, delta: f64) {
         self.session_cost += delta;
         self.refresh_displayed_cost_high_water();
@@ -2718,6 +2717,12 @@ pub enum AppAction {
         model: Option<String>,
     },
     UpdateCompaction(CompactionConfig),
+    SyncModeAndPermissions {
+        mode: AppMode,
+        allow_shell: bool,
+        trust_mode: bool,
+        auto_approve: bool,
+    },
     OpenContextInspector,
     CompactContext,
     TaskAdd {
