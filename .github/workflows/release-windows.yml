@@ -1,0 +1,60 @@
+name: Release Windows
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, for example v0.5.0"
+        required: true
+        default: "v0.5.0"
+
+permissions:
+  contents: write
+
+jobs:
+  windows-release:
+    name: Build Windows x64 release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binaries
+        shell: pwsh
+        run: |
+          cargo build --release --locked --bin xiaomimimo --bin xiaomimimo-tui
+
+      - name: Prepare Windows artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target\release\xiaomimimo.exe dist\xiaomimimo-windows-x64.exe
+          Copy-Item target\release\xiaomimimo-tui.exe dist\xiaomimimo-tui-windows-x64.exe
+          Get-FileHash -Algorithm SHA256 dist\*.exe |
+            Sort-Object Path |
+            ForEach-Object { "$($_.Hash.ToLower()) *$([System.IO.Path]::GetFileName($_.Path))" } |
+            Set-Content -Encoding ascii dist\xiaomimimo-artifacts-sha256.txt
+          Get-ChildItem dist
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: xiaomimimo-windows-x64
+          path: dist/*
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: XiaomiMiMo-TUI ${{ github.event.inputs.tag || github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          files: dist/*
+          draft: false
+          prerelease: false

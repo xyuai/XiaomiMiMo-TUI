@@ -1,31 +1,44 @@
 # XiaomiMiMo-TUI
 
-XiaomiMiMo-TUI is a terminal user interface client adapted for Xiaomi MiMo.
+XiaomiMiMo-TUI 是一个为 Xiaomi MiMo 适配的终端 TUI 客户端。
 
-It provides a keyboard-first TUI experience for working with Xiaomi MiMo-compatible OpenAI-style chat APIs, with configuration, session persistence, tool execution, and model/provider settings built around Xiaomi MiMo usage.
+它面向 Xiaomi MiMo 兼容的 OpenAI 风格 Chat API，提供键盘优先的终端交互体验，适合在命令行里进行连续对话、代码辅助、工具调用和会话管理。
 
-> This project was originally based on [deepseektui](https://github.com/Hmbown/DeepSeek-TUI), which is licensed under the MIT License. It has been modified and adapted for Xiaomi MiMo and may not follow upstream deepseektui updates.
+> 本项目最初基于 [deepseektui](https://github.com/Hmbown/DeepSeek-TUI) v0.8.2 修改而来，原项目使用 MIT License。当前项目已围绕 Xiaomi MiMo 进行适配，后续不一定跟随 deepseektui 上游更新。
 
-## Features
+## 功能简介
 
-- Terminal UI for Xiaomi MiMo chat workflows
-- OpenAI-compatible API endpoint support
-- Config file and environment-variable based setup
-- Session/history persistence
-- Tool and shell workflow support inherited from the original TUI architecture
-- Cross-platform npm wrapper for release binaries
+- **MiMo 对话 TUI**：在终端中使用 Xiaomi MiMo 进行多轮对话。
+- **OpenAI 兼容接口**：默认使用 Xiaomi MiMo OpenAI-compatible API，也可通过配置覆盖 Base URL。
+- **模型配置**：默认模型为 `mimo-v2.5-pro`，可通过配置文件、环境变量或命令行切换。
+- **会话管理**：支持会话保存、恢复和历史记录。
+- **工具工作流**：保留原 TUI 架构中的工具调用、文件/命令辅助等能力。
+- **Windows 发布包**：当前 Release 优先提供 Windows x64 可执行文件。
 
-## Quick start
+## 快速开始
 
-### From source
+### Windows Release
+
+在 GitHub Release 下载 Windows x64 资产：
+
+- `xiaomimimo-windows-x64.exe`
+- `xiaomimimo-tui-windows-x64.exe`
+- `xiaomimimo-artifacts-sha256.txt`
+
+设置 API Key 后运行：
+
+```powershell
+$env:XIAOMIMIMO_API_KEY="your-api-key"
+.\xiaomimimo-windows-x64.exe
+```
+
+### 从源码运行
 
 ```powershell
 $env:XIAOMIMIMO_API_KEY="your-api-key"
 $env:XIAOMIMIMO_BASE_URL="https://token-plan-cn.xiaomimimo.com/v1"
 cargo run --bin xiaomimimo
 ```
-
-Default model: `mimo-v2.5-pro`.
 
 ### npm wrapper
 
@@ -35,13 +48,13 @@ xiaomimimo login --api-key "YOUR_XIAOMIMIMO_API_KEY"
 xiaomimimo
 ```
 
-The npm package installs wrapper commands for `xiaomimimo` and `xiaomimimo-tui` from GitHub release artifacts.
+> 当前 npm wrapper 的预构建二进制优先支持 Windows x64。
 
-## Configuration
+## 配置
 
-Configuration is read from `~/.xiaomimimo/config.toml`, environment variables, and command-line options.
+配置来源包括 `~/.xiaomimimo/config.toml`、环境变量和命令行参数。
 
-Common environment variables:
+常用环境变量：
 
 ```bash
 XIAOMIMIMO_API_KEY=your-api-key
@@ -49,32 +62,37 @@ XIAOMIMIMO_BASE_URL=https://token-plan-cn.xiaomimimo.com/v1
 XIAOMIMIMO_MODEL=mimo-v2.5-pro
 ```
 
-A sample config is available in [`config.example.toml`](config.example.toml), and a sample environment file is available in [`.env.example`](.env.example).
+示例配置文件：[`config.example.toml`](config.example.toml)  
+示例环境变量文件：[`.env.example`](.env.example)
 
-## Repository
+## 发布版本
 
-- GitHub: [xyuai/XiaomiMiMo-TUI](https://github.com/xyuai/XiaomiMiMo-TUI)
-- Version: `0.5.0`
+当前版本：`0.5.0`
 
-## Relationship to deepseektui
+Windows x64 Release 资产：
 
-This project was initially adapted from [deepseektui](https://github.com/Hmbown/DeepSeek-TUI) v0.8.2.
+| 文件 | 说明 |
+| --- | --- |
+| `xiaomimimo-windows-x64.exe` | 主命令入口 |
+| `xiaomimimo-tui-windows-x64.exe` | TUI 可执行文件 |
+| `xiaomimimo-artifacts-sha256.txt` | SHA-256 校验文件 |
 
-Original project: [https://github.com/Hmbown/DeepSeek-TUI](https://github.com/Hmbown/DeepSeek-TUI)  
-Original license: MIT License
+## 与 deepseektui 的关系
 
-Portions of this repository may include code derived from deepseektui. Xiaomi MiMo-specific modifications are maintained here.
+本项目最初基于 [deepseektui](https://github.com/Hmbown/DeepSeek-TUI) v0.8.2 适配而来。
 
-## 中文
+- 原项目：<https://github.com/Hmbown/DeepSeek-TUI>
+- 原许可证：MIT License
+- 当前项目：<https://github.com/xyuai/XiaomiMiMo-TUI>
 
-# XiaomiMiMo-TUI
+本仓库保留必要的原项目版权和来源说明，Xiaomi MiMo 相关修改由本仓库维护。
 
-XiaomiMiMo-TUI 是一个为 Xiaomi MiMo 适配的终端 TUI 客户端。
+## English
 
-它面向 Xiaomi MiMo 兼容的 OpenAI 风格 Chat API，提供键盘优先的终端交互体验，并包含配置、会话保存、工具调用、模型/Provider 设置等能力。
+XiaomiMiMo-TUI is a terminal user interface client adapted for Xiaomi MiMo. It provides a keyboard-first chat workflow, configuration management, session persistence, and tool-oriented terminal usage for Xiaomi MiMo-compatible OpenAI-style APIs.
 
-本项目最初基于 [deepseektui](https://github.com/Hmbown/DeepSeek-TUI) v0.8.2 修改而来，原项目使用 MIT License。由于 Xiaomi MiMo 与 DeepSeek 模型及接口侧重点不同，本项目后续将主要围绕 Xiaomi MiMo 进行适配，不一定跟随 deepseektui 上游更新。
+This project was originally adapted from [deepseektui](https://github.com/Hmbown/DeepSeek-TUI) v0.8.2 under the MIT License.
 
-## 许可证
+## License
 
-MIT。请查看 [LICENSE](LICENSE) 和 [NOTICE.md](NOTICE.md)。
+MIT. See [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md).

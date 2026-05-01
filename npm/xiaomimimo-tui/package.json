@@ -2,7 +2,7 @@
   "name": "xiaomimimo-tui",
   "version": "0.5.0",
   "xiaomimimoBinaryVersion": "0.5.0",
-  "description": "Install and run XiaomiMiMo-TUI binaries from GitHub release artifacts.",
+  "description": "Windows x64 npm wrapper for XiaomiMiMo-TUI release binaries.",
   "author": "xyuai",
   "license": "MIT",
   "homepage": "https://github.com/xyuai/XiaomiMiMo-TUI",
@@ -44,5 +44,11 @@
     "scripts/*.js",
     "README.md",
     "package.json"
+  ],
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
   ]
 }

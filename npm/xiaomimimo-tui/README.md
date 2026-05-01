@@ -1,29 +1,16 @@
 # xiaomimimo-tui
 
-npm wrapper for **XiaomiMiMo-TUI**.
+`xiaomimimo-tui` 是 **XiaomiMiMo-TUI** 的 npm 安装包装器，用于从 GitHub Release 下载并运行 Windows x64 预构建二进制文件。
 
-This package installs and runs the `xiaomimimo` and `xiaomimimo-tui` binaries from GitHub release artifacts.
+项目仓库：<https://github.com/xyuai/XiaomiMiMo-TUI>
 
-Project repository: [xyuai/XiaomiMiMo-TUI](https://github.com/xyuai/XiaomiMiMo-TUI)
-
-## Install
+## 安装
 
 ```bash
 npm install -g xiaomimimo-tui
-# or
-pnpm add -g xiaomimimo-tui
 ```
 
-For project-local usage:
-
-```bash
-npm install xiaomimimo-tui
-npx xiaomimimo-tui --help
-```
-
-`postinstall` downloads platform binaries into `bin/downloads/` and exposes `xiaomimimo` and `xiaomimimo-tui` commands.
-
-## First run
+## 使用
 
 ```bash
 xiaomimimo login --api-key "YOUR_XIAOMIMIMO_API_KEY"
@@ -31,32 +18,27 @@ xiaomimimo doctor
 xiaomimimo
 ```
 
-The `xiaomimimo` facade and `xiaomimimo-tui` binary share `~/.xiaomimimo/config.toml` for Xiaomi MiMo auth and default model settings.
+该包装器会暴露两个命令：
 
-The app talks to Xiaomi MiMo's OpenAI-compatible Chat Completions API. Set `XIAOMIMIMO_BASE_URL` when you need to override the default endpoint.
+- `xiaomimimo`
+- `xiaomimimo-tui`
 
-## Supported platforms
+配置文件默认位于 `~/.xiaomimimo/config.toml`。
 
-- Linux x64
-- macOS x64 / arm64
+## 支持平台
+
+当前预构建 Release 资产仅提供：
+
 - Windows x64
 
-Other platform/architecture combinations are not supported and will fail during install.
+## 配置
 
-## Configuration
+- 默认二进制版本来自 `package.json` 中的 `xiaomimimoBinaryVersion`。
+- 可用 `XIAOMIMIMO_TUI_VERSION` 或 `XIAOMIMIMO_VERSION` 覆盖下载版本。
+- 可用 `XIAOMIMIMO_TUI_GITHUB_REPO` 或 `XIAOMIMIMO_GITHUB_REPO` 覆盖下载仓库，默认 `xyuai/XiaomiMiMo-TUI`。
+- 设置 `XIAOMIMIMO_TUI_FORCE_DOWNLOAD=1` 可强制重新下载。
+- 设置 `XIAOMIMIMO_TUI_DISABLE_INSTALL=1` 可跳过安装时下载。
 
-- Default binary version comes from `xiaomimimoBinaryVersion` in `package.json`.
-- Set `XIAOMIMIMO_TUI_VERSION` or `XIAOMIMIMO_VERSION` to override the release version.
-- Set `XIAOMIMIMO_TUI_GITHUB_REPO` or `XIAOMIMIMO_GITHUB_REPO` to override the source repo; default: `xyuai/XiaomiMiMo-TUI`.
-- Set `XIAOMIMIMO_TUI_FORCE_DOWNLOAD=1` to force download even when the cached binary is already present.
-- Set `XIAOMIMIMO_TUI_DISABLE_INSTALL=1` to skip install-time download.
+## English
 
-## Release integrity
-
-- `npm publish` runs a release-asset check to ensure all required binary assets exist for the target GitHub release before publishing.
-- Install-time downloads are verified against the release checksum manifest before the wrapper marks them executable.
-- Set `XIAOMIMIMO_TUI_RELEASE_BASE_URL` to point the installer at a local or staged release-asset directory for smoke tests.
-
-## Notice
-
-XiaomiMiMo-TUI was originally adapted from [deepseektui](https://github.com/Hmbown/DeepSeek-TUI), licensed under the MIT License.
+npm wrapper for **XiaomiMiMo-TUI**. It installs and runs the `xiaomimimo` and `xiaomimimo-tui` Windows x64 binaries from GitHub release artifacts.

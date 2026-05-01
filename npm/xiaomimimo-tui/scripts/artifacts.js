@@ -4,14 +4,6 @@ const os = require("os");
 const CHECKSUM_MANIFEST = "xiaomimimo-artifacts-sha256.txt";
 
 const ASSET_MATRIX = {
-  linux: {
-    x64: ["xiaomimimo-linux-x64", "xiaomimimo-tui-linux-x64"],
-    // arm64: ["xiaomimimo-linux-arm64", "xiaomimimo-tui-linux-arm64"], // Uncomment when binaries are available
-  },
-  darwin: {
-    x64: ["xiaomimimo-macos-x64", "xiaomimimo-tui-macos-x64"],
-    arm64: ["xiaomimimo-macos-arm64", "xiaomimimo-tui-macos-arm64"],
-  },
   win32: {
     x64: ["xiaomimimo-windows-x64.exe", "xiaomimimo-tui-windows-x64.exe"],
   },
