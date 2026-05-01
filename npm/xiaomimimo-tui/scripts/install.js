@@ -25,7 +25,7 @@ function resolvePackageVersion() {
 }
 
 function resolveRepo() {
-  return process.env.XIAOMIMIMO_TUI_GITHUB_REPO || process.env.XIAOMIMIMO_GITHUB_REPO || "YOUR_GITHUB_USERNAME/mimotui";
+  return process.env.XIAOMIMIMO_TUI_GITHUB_REPO || process.env.XIAOMIMIMO_GITHUB_REPO || "xyuai/XiaomiMiMo-TUI";
 }
 
 function binaryPaths() {

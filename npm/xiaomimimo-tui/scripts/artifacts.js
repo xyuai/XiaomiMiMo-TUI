@@ -42,7 +42,7 @@ function executableName(base, platform) {
   return platform === "win32" ? `${base}.exe` : base;
 }
 
-function releaseBaseUrl(version, repo = "YOUR_GITHUB_USERNAME/mimotui") {
+function releaseBaseUrl(version, repo = "xyuai/XiaomiMiMo-TUI") {
   const override =
     process.env.XIAOMIMIMO_TUI_RELEASE_BASE_URL || process.env.XIAOMIMIMO_RELEASE_BASE_URL;
   if (override) {
@@ -52,11 +52,11 @@ function releaseBaseUrl(version, repo = "YOUR_GITHUB_USERNAME/mimotui") {
   return `https://github.com/${repo}/releases/download/v${version}/`;
 }
 
-function releaseAssetUrl(baseName, version, repo = "YOUR_GITHUB_USERNAME/mimotui") {
+function releaseAssetUrl(baseName, version, repo = "xyuai/XiaomiMiMo-TUI") {
   return new URL(baseName, releaseBaseUrl(version, repo)).toString();
 }
 
-function checksumManifestUrl(version, repo = "YOUR_GITHUB_USERNAME/mimotui") {
+function checksumManifestUrl(version, repo = "xyuai/XiaomiMiMo-TUI") {
   return releaseAssetUrl(CHECKSUM_MANIFEST, version, repo);
 }
 

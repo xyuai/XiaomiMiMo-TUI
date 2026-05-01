@@ -2,16 +2,16 @@
   "name": "xiaomimimo-tui",
   "version": "0.5.0",
   "xiaomimimoBinaryVersion": "0.5.0",
-  "description": "Install and run xiaomimimo and xiaomimimo-tui binaries from GitHub release artifacts.",
-  "author": "YOUR_GITHUB_USERNAME",
+  "description": "Install and run XiaomiMiMo-TUI binaries from GitHub release artifacts.",
+  "author": "xyuai",
   "license": "MIT",
-  "homepage": "https://github.com/YOUR_GITHUB_USERNAME/mimotui",
+  "homepage": "https://github.com/xyuai/XiaomiMiMo-TUI",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/YOUR_GITHUB_USERNAME/mimotui.git"
+    "url": "git+https://github.com/xyuai/XiaomiMiMo-TUI.git"
   },
   "bugs": {
-    "url": "https://github.com/YOUR_GITHUB_USERNAME/mimotui/issues"
+    "url": "https://github.com/xyuai/XiaomiMiMo-TUI/issues"
   },
   "keywords": [
     "xiaomimimo",

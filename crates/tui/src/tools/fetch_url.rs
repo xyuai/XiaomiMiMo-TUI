@@ -24,7 +24,7 @@ const DEFAULT_TIMEOUT_MS: u64 = 15_000;
 const HARD_MAX_TIMEOUT_MS: u64 = 60_000;
 const MAX_REDIRECTS: usize = 5;
 const USER_AGENT: &str =
-    "Mozilla/5.0 (compatible; xiaomimimo-tui/0.5; +https://github.com/YOUR_USERNAME/mimotui)";
+    "Mozilla/5.0 (compatible; xiaomimimo-tui/0.5; +https://github.com/xyuai/XiaomiMiMo-TUI)";
 
 static SCRIPT_RE: OnceLock<Regex> = OnceLock::new();
 static STYLE_RE: OnceLock<Regex> = OnceLock::new();

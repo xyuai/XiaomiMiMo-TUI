@@ -1,8 +1,8 @@
-# XiaomiMiMo TUI Configuration
+# XiaomiMiMo-TUI Configuration
 # Unofficial CLI for Xiaomi MiMo Platform.
 # See docs/CONFIGURATION.md for full config-loading behavior.
 
-# Active provider + Xiaomi MiMo defaults.
+# Active provider and Xiaomi MiMo defaults.
 provider = "xiaomimimo" # xiaomimimo | nvidia-nim | openrouter | novita | fireworks | sglang
 api_key = "YOUR_XIAOMIMIMO_API_KEY" # or set XIAOMIMIMO_API_KEY
 base_url = "https://token-plan-cn.xiaomimimo.com/v1"

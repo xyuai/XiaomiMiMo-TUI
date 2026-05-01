@@ -22,7 +22,7 @@ resolver = "2"
 version = "0.5.0"
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/YOUR_GITHUB_USERNAME/mimotui"
+repository = "https://github.com/xyuai/XiaomiMiMo-TUI"
 
 [workspace.dependencies]
 anyhow = "1.0.100"
