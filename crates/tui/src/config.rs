@@ -386,7 +386,7 @@ pub struct NotificationsConfig {
 }
 
 fn default_snapshots_enabled() -> bool {
-    true
+    false
 }
 
 fn default_snapshot_max_age_days() -> u64 {
@@ -727,8 +727,9 @@ pub struct Config {
     #[serde(default)]
     pub skills: Option<SkillsConfig>,
 
-    /// Workspace side-git snapshots (#137). Defaults to enabled with 7-day
-    /// retention when the table is absent.
+    /// Workspace side-git snapshots (#137). Defaults to disabled with 7-day
+    /// retention when the table is absent. Enable explicitly in a project
+    /// workspace if restore checkpoints are desired.
     #[serde(default)]
     pub snapshots: Option<SnapshotsConfig>,
 
@@ -2091,6 +2092,12 @@ default_text_model = "{default_model}"
 # "off" | "low" | "medium" | "high" | "max"
 # Shift+Tab in the TUI cycles between off / high / max.
 reasoning_effort = "max"
+
+# Workspace snapshots are off by default to avoid scanning large folders
+# such as Downloads before each message. Enable only inside a project folder
+# if you need /restore checkpoints.
+[snapshots]
+enabled = false
 "#,
             default_model = DEFAULT_TEXT_MODEL
         )

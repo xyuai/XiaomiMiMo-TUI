@@ -147,7 +147,7 @@ impl Default for EngineConfig {
             plan_state: new_shared_plan_state(),
             max_spawn_depth: crate::tools::subagent::DEFAULT_MAX_SPAWN_DEPTH,
             network_policy: None,
-            snapshots_enabled: true,
+            snapshots_enabled: false,
             lsp_config: None,
             runtime_services: RuntimeToolServices::default(),
             subagent_model_overrides: HashMap::new(),

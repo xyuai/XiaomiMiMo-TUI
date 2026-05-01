@@ -1085,11 +1085,14 @@ fn delegate_simple_tui(args: Vec<String>) -> Result<()> {
 /// dispatcher. Honours platform executable suffix (`.exe` on Windows) so
 /// the npm-distributed Windows package — which ships
 /// `bin/downloads/xiaomimimo-tui.exe` — is found by `Path::exists` (#247).
+/// Release artifacts with platform suffixes (for example
+/// `xiaomimimo-tui-windows-x64.exe`) are also accepted so users can run the
+/// downloaded files without manually renaming them.
 ///
 /// `XIAOMIMIMO_TUI_BIN` is consulted first as an explicit override for
 /// custom installs and CI test layouts. On Windows we additionally try
-/// the suffix-less name as a fallback for users who already manually
-/// renamed the file before this fix landed.
+/// release-artifact and suffix-less names as fallbacks for users who have not
+/// renamed, or who already manually renamed, the file before this fix landed.
 fn locate_sibling_tui_binary() -> Result<PathBuf> {
     if let Ok(override_path) = std::env::var("XIAOMIMIMO_TUI_BIN") {
         let candidate = PathBuf::from(override_path);
@@ -1126,6 +1129,14 @@ fn sibling_tui_candidate(dispatcher: &Path) -> Option<PathBuf> {
         dispatcher.with_file_name(format!("xiaomimimo-tui{}", std::env::consts::EXE_SUFFIX));
     if primary.is_file() {
         return Some(primary);
+    }
+    // GitHub Release artifact name used by this fork.
+    let release_asset = dispatcher.with_file_name(format!(
+        "xiaomimimo-tui-windows-x64{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    if release_asset.is_file() {
+        return Some(release_asset);
     }
     // Windows fallback: a user who manually renamed `.exe` away (per the
     // workaround in #247) still launches successfully under the new code.

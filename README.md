@@ -23,14 +23,18 @@ XiaomiMiMo-TUI 是一个为 Xiaomi MiMo 适配的终端 TUI 客户端。
 
 - `xiaomimimo-windows-x64.exe`
 - `xiaomimimo-tui-windows-x64.exe`
+- `xiaomimimo.exe`
+- `xiaomimimo-tui.exe`
 - `xiaomimimo-artifacts-sha256.txt`
 
 设置 API Key 后运行：
 
 ```powershell
 $env:XIAOMIMIMO_API_KEY="your-api-key"
-.\xiaomimimo-windows-x64.exe
+.\xiaomimimo.exe
 ```
+
+> 从 v0.5.2 开始，工作区快照默认关闭，避免在 `Downloads` 等大目录启动后发送消息前扫描整个目录。若你在项目目录中需要 `/restore` 快照功能，可在 `~/.xiaomimimo/config.toml` 中手动开启 `[snapshots] enabled = true`。
 
 ### 从源码运行
 

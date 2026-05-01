@@ -8,6 +8,6 @@ description = "MCP server lifecycle and tool proxy compatibility for XiaomiMiMo 
 
 [dependencies]
 anyhow.workspace = true
-xiaomimimo-protocol = { path = "../protocol", version = "0.5.1" }
+xiaomimimo-protocol = { path = "../protocol", version = "0.5.2" }
 serde.workspace = true
 serde_json.workspace = true
