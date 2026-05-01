@@ -1,0 +1,12 @@
+[package]
+name = "xiaomimimo-execpolicy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Execution policy and approval model parity for XiaomiMiMo workspace architecture"
+
+[dependencies]
+anyhow.workspace = true
+xiaomimimo-protocol = { path = "../protocol", version = "0.5.0" }
+serde.workspace = true

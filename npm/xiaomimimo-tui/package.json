@@ -1,0 +1,48 @@
+{
+  "name": "xiaomimimo-tui",
+  "version": "0.5.0",
+  "xiaomimimoBinaryVersion": "0.5.0",
+  "description": "Install and run xiaomimimo and xiaomimimo-tui binaries from GitHub release artifacts.",
+  "author": "YOUR_GITHUB_USERNAME",
+  "license": "MIT",
+  "homepage": "https://github.com/YOUR_GITHUB_USERNAME/mimotui",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YOUR_GITHUB_USERNAME/mimotui.git"
+  },
+  "bugs": {
+    "url": "https://github.com/YOUR_GITHUB_USERNAME/mimotui/issues"
+  },
+  "keywords": [
+    "xiaomimimo",
+    "cli",
+    "tui",
+    "rust",
+    "binary",
+    "terminal"
+  ],
+  "type": "commonjs",
+  "bin": {
+    "xiaomimimo": "bin/xiaomimimo.js",
+    "xiaomimimo-tui": "bin/xiaomimimo-tui.js"
+  },
+  "scripts": {
+    "release:check": "node scripts/verify-release-assets.js",
+    "postinstall": "node scripts/install.js",
+    "prepublishOnly": "node scripts/verify-release-assets.js",
+    "prepack": "node scripts/install.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "preferGlobal": true,
+  "files": [
+    "bin/*.js",
+    "scripts/*.js",
+    "README.md",
+    "package.json"
+  ]
+}

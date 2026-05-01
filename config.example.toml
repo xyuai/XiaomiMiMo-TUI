@@ -1,0 +1,128 @@
+# XiaomiMiMo TUI Configuration
+# Unofficial CLI for Xiaomi MiMo Platform.
+# See docs/CONFIGURATION.md for full config-loading behavior.
+
+# Active provider + Xiaomi MiMo defaults.
+provider = "xiaomimimo" # xiaomimimo | nvidia-nim | openrouter | novita | fireworks | sglang
+api_key = "YOUR_XIAOMIMIMO_API_KEY" # or set XIAOMIMIMO_API_KEY
+base_url = "https://token-plan-cn.xiaomimimo.com/v1"
+# Anthropic-compatible base URL, for external Anthropic SDK/proxy use:
+# https://token-plan-cn.xiaomimimo.com/anthropic
+default_text_model = "mimo-v2.5-pro"
+
+# Xiaomi MiMo thinking toggle.
+# "off" sends thinking.type = disabled; any other value sends thinking.type = enabled.
+reasoning_effort = "max"
+
+# Paths.
+skills_dir = "~/.xiaomimimo/skills"
+mcp_config_path = "~/.xiaomimimo/mcp.json"
+notes_path = "~/.xiaomimimo/notes.txt"
+memory_path = "~/.xiaomimimo/memory.md"
+
+# Agent safety defaults.
+allow_shell = true
+approval_policy = "on-request" # on-request | untrusted | never
+sandbox_mode = "workspace-write" # read-only | workspace-write | danger-full-access | external-sandbox
+max_subagents = 5
+
+# Provider credentials. Env vars override this file.
+# XiaomiMiMo: XIAOMIMIMO_API_KEY, XIAOMIMIMO_BASE_URL, XIAOMIMIMO_MODEL
+# NIM:        NVIDIA_API_KEY or NVIDIA_NIM_API_KEY, NVIDIA_NIM_BASE_URL, NVIDIA_NIM_MODEL
+# OpenRouter: OPENROUTER_API_KEY, OPENROUTER_BASE_URL
+# Novita:     NOVITA_API_KEY, NOVITA_BASE_URL
+# Fireworks:  FIREWORKS_API_KEY, FIREWORKS_BASE_URL
+# SGLang:     SGLANG_BASE_URL, SGLANG_MODEL, optional SGLANG_API_KEY
+
+[providers.xiaomimimo]
+# api_key = "YOUR_XIAOMIMIMO_API_KEY"
+# base_url = "https://token-plan-cn.xiaomimimo.com/v1"
+# model = "mimo-v2.5-pro" # also: mimo-v2.5, mimo-v2-pro, mimo-v2-omni, mimo-v2-flash
+
+[providers.nvidia_nim]
+# api_key = "YOUR_NVIDIA_API_KEY"
+# base_url = "https://integrate.api.nvidia.com/v1"
+# model = "mimo-v2.5-pro"
+
+[providers.openrouter]
+# api_key = "YOUR_OPENROUTER_API_KEY"
+# base_url = "https://openrouter.ai/api/v1"
+# model = "mimo-v2.5-pro"
+
+[providers.novita]
+# api_key = "YOUR_NOVITA_API_KEY"
+# base_url = "https://api.novita.ai/v1"
+# model = "mimo-v2.5-pro"
+
+[providers.fireworks]
+# api_key = "YOUR_FIREWORKS_API_KEY"
+# base_url = "https://api.fireworks.ai/inference/v1"
+# model = "mimo-v2.5-pro"
+
+[providers.sglang]
+# api_key = "OPTIONAL_SGLANG_TOKEN"
+# base_url = "http://localhost:30000/v1"
+# model = "mimo-v2.5-pro"
+
+[network]
+# default = "prompt" # allow | deny | prompt
+# allow = ["token-plan-cn.xiaomimimo.com", "github.com", ".githubusercontent.com"]
+# deny = []
+# audit = true
+
+[tui]
+alternate_screen = "auto" # auto | always | never
+mouse_capture = true
+
+[features]
+shell_tool = true
+subagents = true
+web_search = true
+apply_patch = true
+mcp = true
+exec_policy = true
+
+[retry]
+enabled = true
+max_retries = 3
+initial_delay = 1.0
+max_delay = 60.0
+exponential_base = 2.0
+
+[context]
+enabled = false
+verbatim_window_turns = 16
+l1_threshold = 192000
+l2_threshold = 384000
+l3_threshold = 576000
+cycle_threshold = 768000
+seam_model = "mimo-v2-flash"
+
+[capacity]
+enabled = false
+low_risk_max = 0.50
+medium_risk_max = 0.62
+severe_min_slack = -0.25
+severe_violation_ratio = 0.40
+refresh_cooldown_turns = 6
+replan_cooldown_turns = 5
+max_replay_per_turn = 1
+min_turns_before_guardrail = 4
+profile_window = 8
+xiaomimimo_v4_pro_prior = 3.5    # internal key for mimo-v2.5-pro / mimo-v2.5 / mimo-v2-pro
+xiaomimimo_v4_flash_prior = 4.2  # internal key for mimo-v2-flash
+fallback_default_prior = 3.8
+
+[profiles.work]
+api_key = "WORK_XIAOMIMIMO_API_KEY"
+base_url = "https://token-plan-cn.xiaomimimo.com/v1"
+default_text_model = "mimo-v2.5-pro"
+
+[profiles.dev]
+api_key = "DEV_XIAOMIMIMO_API_KEY"
+allow_shell = true
+
+[notifications]
+# method = "auto" # auto | osc9 | bel | off
+# threshold_secs = 30
+# include_summary = false

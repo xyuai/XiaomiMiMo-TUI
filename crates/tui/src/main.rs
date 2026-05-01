@@ -1,0 +1,3585 @@
+//! CLI entry point for the `XiaomiMiMo` client.
+
+use std::io::{self, IsTerminal, Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::Duration;
+
+use anyhow::{Context, Result, anyhow, bail};
+use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap_complete::{Shell, generate};
+use dotenvy::dotenv;
+use tempfile::NamedTempFile;
+use wait_timeout::ChildExt;
+
+mod audit;
+mod automation_manager;
+mod client;
+mod command_safety;
+mod commands;
+mod compaction;
+mod config;
+mod core;
+mod cycle_manager;
+mod xiaomimimo_theme;
+mod error_taxonomy;
+mod eval;
+mod execpolicy;
+mod features;
+mod hooks;
+mod llm_client;
+mod localization;
+mod logging;
+mod lsp;
+mod mcp;
+mod mcp_server;
+mod models;
+mod network_policy;
+mod palette;
+mod pricing;
+mod project_context;
+mod project_doc;
+mod prompts;
+pub mod repl;
+mod responses_api_proxy;
+pub mod rlm;
+mod runtime_api;
+mod runtime_threads;
+mod sandbox;
+mod seam_manager;
+mod session_manager;
+mod settings;
+mod skills;
+mod snapshot;
+mod task_manager;
+#[cfg(test)]
+mod test_support;
+mod tools;
+mod tui;
+mod ui;
+mod utils;
+mod working_set;
+mod workspace_trust;
+
+use crate::config::{Config, DEFAULT_TEXT_MODEL, MAX_SUBAGENTS};
+use crate::eval::{EvalHarness, EvalHarnessConfig, ScenarioStepKind};
+use crate::features::Feature;
+use crate::llm_client::LlmClient;
+use crate::mcp::{McpConfig, McpPool, McpServerConfig};
+use crate::models::{ContentBlock, Message, MessageRequest, SystemPrompt};
+use crate::session_manager::{SessionManager, create_saved_session};
+use crate::tui::history::{summarize_tool_args, summarize_tool_output};
+
+#[derive(Parser, Debug)]
+#[command(
+    name = "xiaomimimo",
+    author,
+    version,
+    about = "XiaomiMiMo TUI/CLI for XiaomiMiMo models",
+    long_about = "Terminal-native TUI and CLI for XiaomiMiMo models.\n\nRun 'xiaomimimo' to start.\n\nNot affiliated with XiaomiMiMo Inc."
+)]
+struct Cli {
+    /// Subcommand to run
+    #[command(subcommand)]
+    command: Option<Commands>,
+
+    #[command(flatten)]
+    feature_toggles: FeatureToggles,
+
+    /// Send a one-shot prompt (non-interactive)
+    #[arg(short, long)]
+    prompt: Option<String>,
+
+    /// YOLO mode: enable agent tools + shell execution
+    #[arg(long)]
+    yolo: bool,
+
+    /// Maximum number of concurrent sub-agents (1-20)
+    #[arg(long)]
+    max_subagents: Option<usize>,
+
+    /// Path to config file
+    #[arg(long)]
+    config: Option<PathBuf>,
+
+    /// Enable verbose logging
+    #[arg(short, long)]
+    verbose: bool,
+
+    /// Config profile name
+    #[arg(long)]
+    profile: Option<String>,
+
+    /// Workspace directory for file operations
+    #[arg(short, long)]
+    workspace: Option<PathBuf>,
+
+    /// Resume a previous session by ID or prefix
+    #[arg(short, long)]
+    resume: Option<String>,
+
+    /// Continue the most recent session
+    #[arg(short = 'c', long = "continue")]
+    continue_session: bool,
+
+    /// Disable the alternate screen buffer (inline mode)
+    #[arg(long = "no-alt-screen")]
+    no_alt_screen: bool,
+
+    /// Enable TUI mouse capture for internal scrolling and transcript selection
+    #[arg(long = "mouse-capture", conflicts_with = "no_mouse_capture")]
+    mouse_capture: bool,
+
+    /// Disable TUI mouse capture so terminal-native text selection works
+    #[arg(long = "no-mouse-capture", conflicts_with = "mouse_capture")]
+    no_mouse_capture: bool,
+
+    /// Skip onboarding screens
+    #[arg(long)]
+    skip_onboarding: bool,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
+enum Commands {
+    /// Run system diagnostics and check configuration
+    Doctor(DoctorArgs),
+    /// Bootstrap MCP config and/or skills directories
+    Setup(SetupArgs),
+    /// Generate shell completions
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: Shell,
+    },
+    /// List saved sessions
+    Sessions {
+        /// Maximum number of sessions to display
+        #[arg(short, long, default_value = "20")]
+        limit: usize,
+        /// Search sessions by title
+        #[arg(short, long)]
+        search: Option<String>,
+    },
+    /// Create default AGENTS.md in current directory
+    Init,
+    /// Save a XiaomiMiMo API key to the config file
+    Login {
+        /// API key to store (otherwise read from stdin)
+        #[arg(long)]
+        api_key: Option<String>,
+    },
+    /// Remove the saved API key
+    Logout,
+    /// List available models from the configured API endpoint
+    Models(ModelsArgs),
+    /// Run a non-interactive prompt
+    Exec(ExecArgs),
+    /// Run a code review over a git diff
+    Review(ReviewArgs),
+    /// Apply a patch file (or stdin) to the working tree
+    Apply(ApplyArgs),
+    /// Run the offline evaluation harness (no network/LLM calls)
+    Eval(EvalArgs),
+    /// Manage MCP servers
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommand,
+    },
+    /// Execpolicy tooling
+    Execpolicy(ExecpolicyCommand),
+    /// Inspect feature flags
+    Features(FeaturesCli),
+    /// Run a command inside the sandbox
+    Sandbox(SandboxArgs),
+    /// Run a local server (e.g. MCP)
+    Serve(ServeArgs),
+    /// Resume a previous session by ID (use --last for most recent)
+    Resume {
+        /// Conversation/session id (UUID or prefix)
+        #[arg(value_name = "SESSION_ID")]
+        session_id: Option<String>,
+        /// Continue the most recent session without a picker
+        #[arg(long = "last", default_value_t = false, conflicts_with = "session_id")]
+        last: bool,
+    },
+    /// Fork a previous session by ID (use --last for most recent)
+    Fork {
+        /// Conversation/session id (UUID or prefix)
+        #[arg(value_name = "SESSION_ID")]
+        session_id: Option<String>,
+        /// Fork the most recent session without a picker
+        #[arg(long = "last", default_value_t = false, conflicts_with = "session_id")]
+        last: bool,
+    },
+    /// Internal: run the responses API proxy.
+    #[command(hide = true)]
+    ResponsesApiProxy(responses_api_proxy::Args),
+}
+
+#[derive(Args, Debug, Clone)]
+struct ExecArgs {
+    /// Prompt to send to the model
+    prompt: String,
+    /// Override model for this run
+    #[arg(long)]
+    model: Option<String>,
+    /// Enable agentic mode with tool access and auto-approvals
+    #[arg(long, default_value_t = false)]
+    auto: bool,
+    /// Emit machine-readable JSON output
+    #[arg(long, default_value_t = false)]
+    json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+struct SetupArgs {
+    /// Initialize MCP configuration at the configured path
+    #[arg(long, default_value_t = false)]
+    mcp: bool,
+    /// Initialize skills directory and an example skill
+    #[arg(long, default_value_t = false)]
+    skills: bool,
+    /// Initialize tools directory with a self-describing example script
+    #[arg(long, default_value_t = false)]
+    tools: bool,
+    /// Initialize plugins directory with a self-describing example
+    #[arg(long, default_value_t = false)]
+    plugins: bool,
+    /// Initialize MCP config, skills, tools, and plugins
+    #[arg(long, default_value_t = false)]
+    all: bool,
+    /// Create a local workspace skills directory (./skills)
+    #[arg(long, default_value_t = false)]
+    local: bool,
+    /// Overwrite existing template files
+    #[arg(long, default_value_t = false)]
+    force: bool,
+    /// Print a compact, read-only status report (no network calls)
+    #[arg(long, default_value_t = false, conflicts_with_all = ["mcp", "skills", "tools", "plugins", "all", "local", "clean"])]
+    status: bool,
+    /// Remove regenerable session checkpoints (latest + offline_queue)
+    #[arg(long, default_value_t = false, conflicts_with_all = ["mcp", "skills", "tools", "plugins", "all", "local", "status"])]
+    clean: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+struct DoctorArgs {
+    /// Emit machine-readable JSON output (skips live API connectivity check)
+    #[arg(long, default_value_t = false)]
+    json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+struct EvalArgs {
+    /// Intentionally fail a specific step (list, read, search, edit, patch, shell)
+    #[arg(long, value_name = "STEP")]
+    fail_step: Option<String>,
+    /// Shell command to run during the exec step
+    #[arg(long, default_value = "printf eval-harness")]
+    shell_command: String,
+    /// Token that must appear in shell output for validation
+    #[arg(long, default_value = "eval-harness")]
+    shell_expect_token: String,
+    /// Maximum characters stored per step output summary
+    #[arg(long, default_value_t = 240)]
+    max_output_chars: usize,
+    /// Emit machine-readable JSON output
+    #[arg(long, default_value_t = false)]
+    json: bool,
+    /// Append one JSONL fixture line per step to `<DIR>/<scenario>.jsonl`.
+    /// Mock LLM tests can later replay these fixtures.
+    #[arg(long, value_name = "DIR")]
+    record: Option<PathBuf>,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+struct ModelsArgs {
+    /// Print models as pretty JSON
+    #[arg(long, default_value_t = false)]
+    json: bool,
+}
+
+#[derive(Args, Debug, Default, Clone)]
+struct FeatureToggles {
+    /// Enable a feature (repeatable). Equivalent to `features.<name>=true`.
+    #[arg(long = "enable", value_name = "FEATURE", action = clap::ArgAction::Append, global = true)]
+    enable: Vec<String>,
+
+    /// Disable a feature (repeatable). Equivalent to `features.<name>=false`.
+    #[arg(long = "disable", value_name = "FEATURE", action = clap::ArgAction::Append, global = true)]
+    disable: Vec<String>,
+}
+
+impl FeatureToggles {
+    fn apply(&self, config: &mut Config) -> Result<()> {
+        for feature in &self.enable {
+            config.set_feature(feature, true)?;
+        }
+        for feature in &self.disable {
+            config.set_feature(feature, false)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Args, Debug, Clone)]
+struct ReviewArgs {
+    /// Review staged changes instead of the working tree
+    #[arg(long, conflicts_with = "base")]
+    staged: bool,
+    /// Base ref to diff against (e.g. origin/main)
+    #[arg(long)]
+    base: Option<String>,
+    /// Limit diff to a specific path
+    #[arg(long)]
+    path: Option<PathBuf>,
+    /// Override model for this review
+    #[arg(long)]
+    model: Option<String>,
+    /// Maximum diff characters to include
+    #[arg(long, default_value_t = 200_000)]
+    max_chars: usize,
+    /// Emit machine-readable JSON output
+    #[arg(long, default_value_t = false)]
+    json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+struct ApplyArgs {
+    /// Patch file to apply (defaults to stdin)
+    #[arg(value_name = "PATCH_FILE")]
+    patch_file: Option<PathBuf>,
+}
+
+#[derive(Args, Debug, Clone)]
+struct ServeArgs {
+    /// Start MCP server over stdio
+    #[arg(long)]
+    mcp: bool,
+    /// Start runtime HTTP/SSE API server
+    #[arg(long)]
+    http: bool,
+    /// Bind host for HTTP server (default localhost)
+    #[arg(long, default_value = "127.0.0.1")]
+    host: String,
+    /// Bind port for HTTP server
+    #[arg(long, default_value_t = 7878)]
+    port: u16,
+    /// Background task worker count (1-8)
+    #[arg(long, default_value_t = 2)]
+    workers: usize,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum McpCommand {
+    /// List configured MCP servers
+    List,
+    /// Create a template MCP config at the configured path
+    Init {
+        /// Overwrite an existing MCP config file
+        #[arg(long, default_value_t = false)]
+        force: bool,
+    },
+    /// Connect to MCP servers and report status
+    Connect {
+        /// Optional server name to connect to
+        #[arg(value_name = "SERVER")]
+        server: Option<String>,
+    },
+    /// List tools discovered from MCP servers
+    Tools {
+        /// Optional server name to list tools for
+        #[arg(value_name = "SERVER")]
+        server: Option<String>,
+    },
+    /// Add an MCP server entry
+    Add {
+        /// Server name
+        name: String,
+        /// Command to launch stdio server
+        #[arg(long, conflicts_with = "url")]
+        command: Option<String>,
+        /// URL for streamable HTTP/SSE server
+        #[arg(long, conflicts_with = "command")]
+        url: Option<String>,
+        /// Arguments for command-based servers
+        #[arg(long = "arg")]
+        args: Vec<String>,
+    },
+    /// Remove an MCP server entry
+    Remove {
+        /// Server name
+        name: String,
+    },
+    /// Enable an MCP server
+    Enable {
+        /// Server name
+        name: String,
+    },
+    /// Disable an MCP server
+    Disable {
+        /// Server name
+        name: String,
+    },
+    /// Validate MCP config and required servers
+    Validate,
+    /// Register this XiaomiMiMo binary as a local MCP stdio server.
+    ///
+    /// This adds a config entry that runs `xiaomimimo serve --mcp` (stdio protocol).
+    /// For the HTTP/SSE runtime API, use `xiaomimimo serve --http` directly instead.
+    #[command(
+        name = "add-self",
+        long_about = "Register this XiaomiMiMo binary as a local MCP stdio server.\n\nAdds a config entry to ~/.xiaomimimo/mcp.json that launches `xiaomimimo serve --mcp`\nvia the stdio transport. Other XiaomiMiMo sessions (or any MCP client) can then\ndiscover and call tools exposed by this server.\n\nUse `xiaomimimo serve --http` instead if you need the HTTP/SSE runtime API."
+    )]
+    AddSelf {
+        /// Server name in mcp.json (default: "xiaomimimo")
+        #[arg(long, default_value = "xiaomimimo")]
+        name: String,
+        /// Workspace directory for the MCP server
+        #[arg(long)]
+        workspace: Option<String>,
+    },
+}
+
+#[derive(Args, Debug, Clone)]
+struct ExecpolicyCommand {
+    #[command(subcommand)]
+    command: ExecpolicySubcommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum ExecpolicySubcommand {
+    /// Check execpolicy files against a command
+    Check(execpolicy::ExecPolicyCheckCommand),
+}
+
+#[derive(Args, Debug, Clone)]
+struct FeaturesCli {
+    #[command(subcommand)]
+    command: FeaturesSubcommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum FeaturesSubcommand {
+    /// List known feature flags and their state
+    List,
+}
+
+#[derive(Args, Debug, Clone)]
+struct SandboxArgs {
+    #[command(subcommand)]
+    command: SandboxCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum SandboxCommand {
+    /// Run a command with sandboxing
+    Run {
+        /// Sandbox policy (danger-full-access, read-only, external-sandbox, workspace-write)
+        #[arg(long, default_value = "workspace-write")]
+        policy: String,
+        /// Allow outbound network access
+        #[arg(long)]
+        network: bool,
+        /// Additional writable roots (repeatable)
+        #[arg(long, value_name = "PATH")]
+        writable_root: Vec<PathBuf>,
+        /// Exclude TMPDIR from writable paths
+        #[arg(long)]
+        exclude_tmpdir: bool,
+        /// Exclude /tmp from writable paths
+        #[arg(long)]
+        exclude_slash_tmp: bool,
+        /// Command working directory
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+        /// Timeout in milliseconds
+        #[arg(long, default_value_t = 60_000)]
+        timeout_ms: u64,
+        /// Command and arguments to run
+        #[arg(required = true, trailing_var_arg = true)]
+        command: Vec<String>,
+    },
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    dotenv().ok();
+    let cli = Cli::parse();
+    logging::set_verbose(cli.verbose || logging::env_requests_verbose_logging());
+
+    // Handle subcommands first
+    if let Some(command) = cli.command.clone() {
+        return match command {
+            Commands::Doctor(args) => {
+                let config = load_config_from_cli(&cli)?;
+                let workspace = resolve_workspace(&cli);
+                if args.json {
+                    run_doctor_json(&config, &workspace, cli.config.as_deref())
+                } else {
+                    run_doctor(&config, &workspace, cli.config.as_deref()).await;
+                    Ok(())
+                }
+            }
+            Commands::Setup(args) => {
+                let config = load_config_from_cli(&cli)?;
+                let workspace = resolve_workspace(&cli);
+                run_setup(&config, &workspace, args)
+            }
+            Commands::Completions { shell } => {
+                generate_completions(shell);
+                Ok(())
+            }
+            Commands::Sessions { limit, search } => list_sessions(limit, search),
+            Commands::Init => init_project(),
+            Commands::Login { api_key } => run_login(api_key),
+            Commands::Logout => run_logout(),
+            Commands::Models(args) => {
+                let config = load_config_from_cli(&cli)?;
+                run_models(&config, args).await
+            }
+            Commands::Exec(args) => {
+                let config = load_config_from_cli(&cli)?;
+                let model = args
+                    .model
+                    .or_else(|| config.default_text_model.clone())
+                    .unwrap_or_else(|| config.default_model());
+                if args.auto || cli.yolo {
+                    let workspace = cli.workspace.clone().unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
+                    let max_subagents = cli.max_subagents.map_or_else(
+                        || config.max_subagents(),
+                        |value| value.clamp(1, MAX_SUBAGENTS),
+                    );
+                    let auto_mode = args.auto || cli.yolo;
+                    run_exec_agent(
+                        &config,
+                        &model,
+                        &args.prompt,
+                        workspace,
+                        max_subagents,
+                        true,
+                        auto_mode,
+                        args.json,
+                    )
+                    .await
+                } else if args.json {
+                    run_one_shot_json(&config, &model, &args.prompt).await
+                } else {
+                    run_one_shot(&config, &model, &args.prompt).await
+                }
+            }
+            Commands::Review(args) => {
+                let config = load_config_from_cli(&cli)?;
+                run_review(&config, args).await
+            }
+            Commands::Apply(args) => run_apply(args),
+            Commands::Eval(args) => run_eval(args),
+            Commands::Mcp { command } => {
+                let config = load_config_from_cli(&cli)?;
+                run_mcp_command(&config, command).await
+            }
+            Commands::Execpolicy(command) => {
+                let config = load_config_from_cli(&cli)?;
+                if !config.features().enabled(Feature::ExecPolicy) {
+                    bail!(
+                        "The `exec_policy` feature is disabled. Enable it in [features] or via profile."
+                    );
+                }
+                run_execpolicy_command(command)
+            }
+            Commands::Features(command) => {
+                let config = load_config_from_cli(&cli)?;
+                run_features_command(&config, command)
+            }
+            Commands::Sandbox(args) => run_sandbox_command(args),
+            Commands::Serve(args) => {
+                let workspace = cli.workspace.clone().unwrap_or_else(|| {
+                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                });
+                if args.mcp && args.http {
+                    bail!("Choose exactly one server mode: --mcp or --http");
+                }
+                if args.mcp {
+                    mcp_server::run_mcp_server(workspace)
+                } else if args.http {
+                    let config = load_config_from_cli(&cli)?;
+                    runtime_api::run_http_server(
+                        config,
+                        workspace,
+                        runtime_api::RuntimeApiOptions {
+                            host: args.host,
+                            port: args.port,
+                            workers: args.workers.clamp(1, 8),
+                        },
+                    )
+                    .await
+                } else {
+                    bail!("No server mode specified. Use --mcp or --http.")
+                }
+            }
+            Commands::Resume { session_id, last } => {
+                let config = load_config_from_cli(&cli)?;
+                let resume_id = resolve_session_id(session_id, last)?;
+                run_interactive(&cli, &config, Some(resume_id)).await
+            }
+            Commands::Fork { session_id, last } => {
+                let config = load_config_from_cli(&cli)?;
+                let new_session_id = fork_session(session_id, last)?;
+                run_interactive(&cli, &config, Some(new_session_id)).await
+            }
+            Commands::ResponsesApiProxy(args) => {
+                responses_api_proxy::run_main(args)?;
+                Ok(())
+            }
+        };
+    }
+
+    // One-shot prompt mode
+    let config = load_config_from_cli(&cli)?;
+    if let Some(prompt) = cli.prompt {
+        let model = config.default_model();
+        return run_one_shot(&config, &model, &prompt).await;
+    }
+
+    // Handle session resume
+    let resume_session_id = if cli.continue_session {
+        // Get most recent session
+        match session_manager::SessionManager::default_location() {
+            Ok(manager) => manager.get_latest_session().ok().flatten().map(|m| m.id),
+            Err(_) => None,
+        }
+    } else {
+        cli.resume.clone()
+    };
+
+    // Default: Interactive TUI
+    // --yolo starts in YOLO mode (shell + trust + auto-approve)
+    run_interactive(&cli, &config, resume_session_id).await
+}
+
+/// Generate shell completions for the given shell
+fn generate_completions(shell: Shell) {
+    let mut cmd = Cli::command();
+    let name = cmd.get_name().to_string();
+    generate(shell, &mut cmd, name, &mut io::stdout());
+}
+
+/// Run the offline evaluation harness (no network/LLM calls).
+fn run_eval(args: EvalArgs) -> Result<()> {
+    let fail_step = match args.fail_step.as_deref() {
+        Some(value) => ScenarioStepKind::parse(value)
+            .map(Some)
+            .ok_or_else(|| anyhow!("invalid --fail-step '{value}'"))?,
+        None => None,
+    };
+
+    let config = EvalHarnessConfig {
+        fail_step,
+        shell_command: args.shell_command,
+        shell_expect_token: args.shell_expect_token,
+        max_output_chars: args.max_output_chars,
+        record_dir: args.record.clone(),
+        ..EvalHarnessConfig::default()
+    };
+
+    let harness = EvalHarness::new(config);
+    let run = harness.run().context("evaluation harness failed")?;
+    let report = run.to_report();
+
+    if args.json {
+        let json = serde_json::to_string_pretty(&report)?;
+        println!("{json}");
+    } else {
+        println!("Offline Eval Harness");
+        println!("scenario: {}", report.scenario_name);
+        println!("workspace: {}", report.workspace_root.display());
+        println!("success: {}", report.metrics.success);
+        println!("steps: {}", report.metrics.steps);
+        println!("tool_errors: {}", report.metrics.tool_errors);
+        println!("duration_ms: {}", report.metrics.duration.as_millis());
+
+        if !report.metrics.per_tool.is_empty() {
+            println!("per_tool:");
+            for (kind, stats) in &report.metrics.per_tool {
+                println!(
+                    "  {} invocations={} errors={} duration_ms={}",
+                    kind.tool_name(),
+                    stats.invocations,
+                    stats.errors,
+                    stats.total_duration.as_millis()
+                );
+            }
+        }
+
+        let failed_steps: Vec<_> = report.steps.iter().filter(|s| !s.success).collect();
+        if !failed_steps.is_empty() {
+            println!("failed_steps:");
+            for step in failed_steps {
+                let error = step.error.as_deref().unwrap_or("unknown error");
+                println!(
+                    "  {} tool={} error={}",
+                    step.kind.tool_name(),
+                    step.tool_name,
+                    error
+                );
+            }
+        }
+    }
+
+    if report.metrics.success {
+        Ok(())
+    } else {
+        bail!("offline evaluation harness reported failure")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WriteStatus {
+    Created,
+    Overwritten,
+    SkippedExists,
+}
+
+fn ensure_parent_dir(path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create directory for {}", parent.display()))?;
+    }
+    Ok(())
+}
+
+fn write_template_file(path: &Path, contents: &str, force: bool) -> Result<WriteStatus> {
+    ensure_parent_dir(path)?;
+
+    if path.exists() && !force {
+        return Ok(WriteStatus::SkippedExists);
+    }
+
+    let status = if path.exists() {
+        WriteStatus::Overwritten
+    } else {
+        WriteStatus::Created
+    };
+
+    std::fs::write(path, contents)
+        .with_context(|| format!("Failed to write template at {}", path.display()))?;
+
+    Ok(status)
+}
+
+fn mcp_template_json() -> Result<String> {
+    let mut cfg = McpConfig::default();
+    cfg.servers.insert(
+        "example".to_string(),
+        McpServerConfig {
+            command: Some("node".to_string()),
+            args: vec!["./path/to/your-mcp-server.js".to_string()],
+            env: std::collections::HashMap::new(),
+            url: None,
+            connect_timeout: None,
+            execute_timeout: None,
+            read_timeout: None,
+            disabled: true,
+            enabled: true,
+            required: false,
+            enabled_tools: Vec::new(),
+            disabled_tools: Vec::new(),
+        },
+    );
+    serde_json::to_string_pretty(&cfg)
+        .map_err(|e| anyhow!("Failed to render MCP template JSON: {e}"))
+}
+
+fn init_mcp_config(path: &Path, force: bool) -> Result<WriteStatus> {
+    let template = mcp_template_json()?;
+    write_template_file(path, &template, force)
+}
+
+fn skills_template(name: &str) -> String {
+    format!(
+        "\
+---\n\
+name: {name}\n\
+description: Quick repo diagnostics and setup guidance\n\
+allowed-tools: diagnostics, list_dir, read_file, grep_files, git_status, git_diff\n\
+---\n\n\
+When this skill is active:\n\
+1. Run the diagnostics tool to report workspace and sandbox status.\n\
+2. Skim key project files (README.md, Cargo.toml, AGENTS.md) before editing.\n\
+3. Prefer small, validated changes and summarize what you verified.\n\
+"
+    )
+}
+
+fn init_skills_dir(skills_dir: &Path, force: bool) -> Result<(PathBuf, WriteStatus)> {
+    std::fs::create_dir_all(skills_dir)
+        .with_context(|| format!("Failed to create skills dir {}", skills_dir.display()))?;
+
+    let skill_name = "getting-started";
+    let skill_path = skills_dir.join(skill_name).join("SKILL.md");
+    ensure_parent_dir(&skill_path)?;
+
+    let status = write_template_file(&skill_path, &skills_template(skill_name), force)?;
+    Ok((skill_path, status))
+}
+
+fn tools_readme_template() -> &'static str {
+    "# Local tools\n\n\
+     Drop self-describing scripts here so they can be discovered by\n\
+     `xiaomimimo-tui setup --status` and surfaced in `xiaomimimo-tui doctor`.\n\n\
+     Each script should start with a frontmatter-style header so the\n\
+     description is visible without executing the file:\n\n\
+     ```\n\
+     # name: my-tool\n\
+     # description: One-line summary of what this tool does\n\
+     # usage: my-tool [args...]\n\
+     ```\n\n\
+     The directory is intentionally not auto-loaded into the agent's tool\n\
+     catalog. Wire individual tools through MCP, hooks, or skills when you\n\
+     want them available inside a session.\n"
+}
+
+fn tools_example_script() -> &'static str {
+    "#!/usr/bin/env sh\n\
+     # name: example\n\
+     # description: Print a confirmation that local tool discovery works\n\
+     # usage: example [name]\n\
+     printf 'xiaomimimo-tui local tool ok: %s\\n' \"${1:-world}\"\n"
+}
+
+fn init_tools_dir(tools_dir: &Path, force: bool) -> Result<(PathBuf, WriteStatus, WriteStatus)> {
+    std::fs::create_dir_all(tools_dir)
+        .with_context(|| format!("Failed to create tools dir {}", tools_dir.display()))?;
+
+    let readme_path = tools_dir.join("README.md");
+    let readme_status = write_template_file(&readme_path, tools_readme_template(), force)?;
+
+    let example_path = tools_dir.join("example.sh");
+    let example_status = write_template_file(&example_path, tools_example_script(), force)?;
+
+    Ok((tools_dir.to_path_buf(), readme_status, example_status))
+}
+
+fn plugins_readme_template() -> &'static str {
+    "# Local plugins\n\n\
+     Plugins are richer than tools: each one lives in its own subdirectory\n\
+     with a `PLUGIN.md` describing what it does and how to enable it. The\n\
+     directory is created so users have a documented place to drop\n\
+     experiments without touching `~/.xiaomimimo/skills/`.\n\n\
+     A plugin layout looks like:\n\n\
+     ```\n\
+     plugins/\n\
+       my-plugin/\n\
+         PLUGIN.md   # frontmatter + body, same shape as SKILL.md\n\
+         scripts/    # optional helpers invoked by the plugin\n\
+     ```\n\n\
+     Plugins are not loaded automatically. Wire them up through skills,\n\
+     hooks, or MCP servers when you want them active in a session.\n"
+}
+
+fn plugin_example_template() -> &'static str {
+    "---\n\
+     name: example\n\
+     description: Placeholder plugin so /skills and doctor have something to show\n\
+     status: example\n\
+     ---\n\n\
+     This is a starter plugin layout. Edit or replace it once you have a\n\
+     real plugin. The agent does not load this file directly; reference it\n\
+     from a skill or MCP wrapper if you want it active in a session.\n"
+}
+
+fn init_plugins_dir(
+    plugins_dir: &Path,
+    force: bool,
+) -> Result<(PathBuf, PathBuf, WriteStatus, WriteStatus)> {
+    std::fs::create_dir_all(plugins_dir)
+        .with_context(|| format!("Failed to create plugins dir {}", plugins_dir.display()))?;
+
+    let readme_path = plugins_dir.join("README.md");
+    let readme_status = write_template_file(&readme_path, plugins_readme_template(), force)?;
+
+    let example_path = plugins_dir.join("example").join("PLUGIN.md");
+    ensure_parent_dir(&example_path)?;
+    let example_status = write_template_file(&example_path, plugin_example_template(), force)?;
+
+    Ok((readme_path, example_path, readme_status, example_status))
+}
+
+fn xiaomimimo_home_dir() -> PathBuf {
+    dirs::home_dir().map_or_else(|| PathBuf::from(".xiaomimimo"), |h| h.join(".xiaomimimo"))
+}
+
+/// Resolve the default tools directory. Mirrors `default_skills_dir` shape.
+fn default_tools_dir() -> PathBuf {
+    xiaomimimo_home_dir().join("tools")
+}
+
+/// Resolve the default plugins directory.
+fn default_plugins_dir() -> PathBuf {
+    xiaomimimo_home_dir().join("plugins")
+}
+
+/// Default location for crash/offline-queue checkpoints managed by the TUI.
+fn default_checkpoints_dir() -> PathBuf {
+    xiaomimimo_home_dir().join("sessions").join("checkpoints")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CleanPlan {
+    targets: Vec<PathBuf>,
+}
+
+fn collect_clean_targets(checkpoints_dir: &Path) -> CleanPlan {
+    let candidates = ["latest.json", "offline_queue.json"];
+    let targets = candidates
+        .iter()
+        .map(|name| checkpoints_dir.join(name))
+        .filter(|p| p.exists())
+        .collect();
+    CleanPlan { targets }
+}
+
+fn execute_clean_plan(plan: &CleanPlan) -> Result<Vec<PathBuf>> {
+    let mut removed = Vec::with_capacity(plan.targets.len());
+    for path in &plan.targets {
+        std::fs::remove_file(path)
+            .with_context(|| format!("Failed to remove {}", path.display()))?;
+        removed.push(path.clone());
+    }
+    Ok(removed)
+}
+
+fn run_setup(config: &Config, workspace: &Path, args: SetupArgs) -> Result<()> {
+    if args.status {
+        return run_setup_status(config, workspace);
+    }
+    if args.clean {
+        return run_setup_clean(&default_checkpoints_dir(), args.force);
+    }
+
+    use crate::palette;
+    use colored::Colorize;
+
+    let (aqua_r, aqua_g, aqua_b) = palette::XIAOMIMIMO_SKY_RGB;
+    let (sky_r, sky_g, sky_b) = palette::XIAOMIMIMO_SKY_RGB;
+
+    let any_explicit = args.mcp || args.skills || args.tools || args.plugins;
+    let run_mcp = args.mcp || args.all || !any_explicit;
+    let run_skills = args.skills || args.all || !any_explicit;
+    let run_tools = args.tools || args.all;
+    let run_plugins = args.plugins || args.all;
+
+    println!(
+        "{}",
+        "XiaomiMiMo Setup".truecolor(aqua_r, aqua_g, aqua_b).bold()
+    );
+    println!("{}", "==============".truecolor(sky_r, sky_g, sky_b));
+    println!("Workspace: {}", workspace.display());
+
+    if run_mcp {
+        let mcp_path = config.mcp_config_path();
+        let status = init_mcp_config(&mcp_path, args.force)?;
+        match status {
+            WriteStatus::Created => {
+                println!("  ✓ Created MCP config at {}", mcp_path.display());
+            }
+            WriteStatus::Overwritten => {
+                println!("  ✓ Overwrote MCP config at {}", mcp_path.display());
+            }
+            WriteStatus::SkippedExists => {
+                println!("  · MCP config already exists at {}", mcp_path.display());
+            }
+        }
+        println!("    Next: edit the file, then run `xiaomimimo mcp list` or `xiaomimimo mcp tools`.");
+    }
+
+    if run_skills {
+        let skills_dir = if args.local {
+            workspace.join("skills")
+        } else {
+            config.skills_dir()
+        };
+        let (skill_path, status) = init_skills_dir(&skills_dir, args.force)?;
+        match status {
+            WriteStatus::Created => {
+                println!("  ✓ Created example skill at {}", skill_path.display());
+            }
+            WriteStatus::Overwritten => {
+                println!("  ✓ Overwrote example skill at {}", skill_path.display());
+            }
+            WriteStatus::SkippedExists => {
+                println!(
+                    "  · Example skill already exists at {}",
+                    skill_path.display()
+                );
+            }
+        }
+        if args.local {
+            println!(
+                "    Local skills dir enabled for this workspace: {}",
+                skills_dir.display()
+            );
+        } else {
+            println!("    Skills dir: {}", skills_dir.display());
+        }
+        println!("    Next: run the TUI and use `/skills` then `/skill getting-started`.");
+    }
+
+    if run_tools {
+        let tools_dir = default_tools_dir();
+        let (dir, readme_status, example_status) = init_tools_dir(&tools_dir, args.force)?;
+        report_write_status("Tools README", &dir.join("README.md"), readme_status);
+        report_write_status("Example tool", &dir.join("example.sh"), example_status);
+        println!("    Tools dir: {}", dir.display());
+        println!("    Next: drop scripts here; surface them via skills/MCP when ready.");
+    }
+
+    if run_plugins {
+        let plugins_dir = default_plugins_dir();
+        let (readme_path, example_path, readme_status, example_status) =
+            init_plugins_dir(&plugins_dir, args.force)?;
+        report_write_status("Plugins README", &readme_path, readme_status);
+        report_write_status("Example plugin", &example_path, example_status);
+        println!("    Plugins dir: {}", plugins_dir.display());
+        println!("    Next: copy the example dir, edit PLUGIN.md, wire via skill/MCP.");
+    }
+
+    let sandbox = crate::sandbox::get_platform_sandbox();
+    if let Some(kind) = sandbox {
+        println!("  ✓ Sandbox available: {kind}");
+    } else {
+        println!("  · Sandbox not available on this platform (best-effort only).");
+    }
+
+    Ok(())
+}
+
+fn report_write_status(label: &str, path: &Path, status: WriteStatus) {
+    match status {
+        WriteStatus::Created => {
+            println!("  ✓ Created {label} at {}", path.display());
+        }
+        WriteStatus::Overwritten => {
+            println!("  ✓ Overwrote {label} at {}", path.display());
+        }
+        WriteStatus::SkippedExists => {
+            println!("  · {label} already exists at {}", path.display());
+        }
+    }
+}
+
+/// Source of the resolved XiaomiMiMo API key, used in status reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ApiKeySource {
+    Env,
+    Config,
+    Missing,
+}
+
+fn resolve_api_key_source(config: &Config) -> ApiKeySource {
+    if std::env::var("XIAOMIMIMO_API_KEY")
+        .ok()
+        .filter(|k| !k.trim().is_empty())
+        .is_some()
+    {
+        ApiKeySource::Env
+    } else if config.xiaomimimo_api_key().is_ok() {
+        ApiKeySource::Config
+    } else {
+        ApiKeySource::Missing
+    }
+}
+
+fn count_dir_entries(dir: &Path) -> usize {
+    std::fs::read_dir(dir)
+        .map(|entries| entries.filter_map(std::result::Result::ok).count())
+        .unwrap_or(0)
+}
+
+fn skills_count_for(dir: &Path) -> usize {
+    if !dir.exists() {
+        return 0;
+    }
+    crate::skills::SkillRegistry::discover(dir).len()
+}
+
+fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
+    use crate::palette;
+    use colored::Colorize;
+
+    let (aqua_r, aqua_g, aqua_b) = palette::XIAOMIMIMO_SKY_RGB;
+    let (sky_r, sky_g, sky_b) = palette::XIAOMIMIMO_SKY_RGB;
+    let (red_r, red_g, red_b) = palette::XIAOMIMIMO_RED_RGB;
+
+    println!(
+        "{}",
+        "XiaomiMiMo Status".truecolor(aqua_r, aqua_g, aqua_b).bold()
+    );
+    println!("{}", "===============".truecolor(sky_r, sky_g, sky_b));
+    println!("workspace: {}", workspace.display());
+
+    match resolve_api_key_source(config) {
+        ApiKeySource::Env => println!(
+            "  {} api_key: set via XIAOMIMIMO_API_KEY",
+            "✓".truecolor(aqua_r, aqua_g, aqua_b)
+        ),
+        ApiKeySource::Config => println!(
+            "  {} api_key: set via config",
+            "✓".truecolor(aqua_r, aqua_g, aqua_b)
+        ),
+        ApiKeySource::Missing => {
+            let (env_var, login_hint) = match config.api_provider() {
+                crate::config::ApiProvider::NvidiaNim => (
+                    "NVIDIA_API_KEY",
+                    "xiaomimimo auth set --provider nvidia-nim --api-key \"...\"",
+                ),
+                crate::config::ApiProvider::Openrouter => (
+                    "OPENROUTER_API_KEY",
+                    "xiaomimimo auth set --provider openrouter --api-key \"...\"",
+                ),
+                crate::config::ApiProvider::Novita => (
+                    "NOVITA_API_KEY",
+                    "xiaomimimo auth set --provider novita --api-key \"...\"",
+                ),
+                crate::config::ApiProvider::Fireworks => (
+                    "FIREWORKS_API_KEY",
+                    "xiaomimimo auth set --provider fireworks --api-key \"...\"",
+                ),
+                crate::config::ApiProvider::Sglang => (
+                    "SGLANG_API_KEY",
+                    "xiaomimimo auth set --provider sglang --api-key \"...\"",
+                ),
+                crate::config::ApiProvider::XiaomiMiMo => {
+                    ("XIAOMIMIMO_API_KEY", "xiaomimimo login --api-key \"...\"")
+                }
+            };
+            println!(
+                "  {} api_key: missing  (set {env_var} or `[providers.{}].api_key` in ~/.xiaomimimo/config.toml; or run `{login_hint}`)",
+                "✗".truecolor(red_r, red_g, red_b),
+                match config.api_provider() {
+                    crate::config::ApiProvider::NvidiaNim => "nvidia_nim",
+                    crate::config::ApiProvider::Openrouter => "openrouter",
+                    crate::config::ApiProvider::Novita => "novita",
+                    crate::config::ApiProvider::Fireworks => "fireworks",
+                    crate::config::ApiProvider::Sglang => "sglang",
+                    crate::config::ApiProvider::XiaomiMiMo => "xiaomimimo",
+                }
+            );
+        }
+    }
+    println!(
+        "  · base_url: {}",
+        config
+            .base_url
+            .as_deref()
+            .unwrap_or("https://token-plan-cn.xiaomimimo.com/v1")
+    );
+    let model = config
+        .default_text_model
+        .clone()
+        .unwrap_or_else(|| DEFAULT_TEXT_MODEL.to_string());
+    println!("  · default_text_model: {model}");
+
+    let mcp_path = config.mcp_config_path();
+    let mcp_count = match load_mcp_config(&mcp_path) {
+        Ok(cfg) => cfg.servers.len(),
+        Err(_) => 0,
+    };
+    let mcp_present = if mcp_path.exists() { "" } else { "  (missing)" };
+    println!(
+        "  · mcp servers: {mcp_count} at {}{mcp_present}",
+        mcp_path.display()
+    );
+
+    let skills_dir = config.skills_dir();
+    println!(
+        "  · skills: {} at {}",
+        skills_count_for(&skills_dir),
+        skills_dir.display()
+    );
+
+    let tools_dir = default_tools_dir();
+    let tools_present = if tools_dir.exists() {
+        ""
+    } else {
+        "  (missing — run `setup --tools`)"
+    };
+    println!(
+        "  · tools: {} entries at {}{tools_present}",
+        if tools_dir.exists() {
+            count_dir_entries(&tools_dir)
+        } else {
+            0
+        },
+        tools_dir.display()
+    );
+
+    let plugins_dir = default_plugins_dir();
+    let plugins_present = if plugins_dir.exists() {
+        ""
+    } else {
+        "  (missing — run `setup --plugins`)"
+    };
+    println!(
+        "  · plugins: {} entries at {}{plugins_present}",
+        if plugins_dir.exists() {
+            count_dir_entries(&plugins_dir)
+        } else {
+            0
+        },
+        plugins_dir.display()
+    );
+
+    let sandbox = crate::sandbox::get_platform_sandbox();
+    match sandbox {
+        Some(kind) => println!(
+            "  {} sandbox: {kind}",
+            "✓".truecolor(aqua_r, aqua_g, aqua_b)
+        ),
+        None => println!(
+            "  {} sandbox: unavailable (commands run best-effort)",
+            "!".truecolor(sky_r, sky_g, sky_b)
+        ),
+    }
+
+    println!("  {} {}", "·".dimmed(), dotenv_status_line(workspace));
+
+    println!();
+    println!("Run `xiaomimimo-tui doctor --json` for a machine-readable check.");
+    Ok(())
+}
+
+fn dotenv_status_line(workspace: &Path) -> String {
+    let dotenv = workspace.join(".env");
+    if dotenv.exists() {
+        return format!(".env present at {}", dotenv.display());
+    }
+
+    if workspace.join(".env.example").exists() {
+        return ".env not present in workspace (run `cp .env.example .env` and edit)".to_string();
+    }
+
+    ".env not present in workspace".to_string()
+}
+
+fn run_setup_clean(checkpoints_dir: &Path, force: bool) -> Result<()> {
+    use colored::Colorize;
+
+    if !checkpoints_dir.exists() {
+        println!(
+            "Nothing to clean — checkpoints dir does not exist: {}",
+            checkpoints_dir.display()
+        );
+        return Ok(());
+    }
+
+    let plan = collect_clean_targets(checkpoints_dir);
+    if plan.targets.is_empty() {
+        println!(
+            "Nothing to clean — no checkpoint files in {}",
+            checkpoints_dir.display()
+        );
+        return Ok(());
+    }
+
+    if !force {
+        println!(
+            "Would remove {} checkpoint file(s) (use --force to apply):",
+            plan.targets.len()
+        );
+        for path in &plan.targets {
+            println!("  · {}", path.display());
+        }
+        return Ok(());
+    }
+
+    let removed = execute_clean_plan(&plan)?;
+    println!("{}", "Cleaned checkpoints:".bold());
+    for path in &removed {
+        println!("  ✓ {}", path.display());
+    }
+    Ok(())
+}
+
+/// Run system diagnostics
+async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Option<&Path>) {
+    use crate::palette;
+    use colored::Colorize;
+
+    let (blue_r, blue_g, blue_b) = palette::XIAOMIMIMO_BLUE_RGB;
+    let (sky_r, sky_g, sky_b) = palette::XIAOMIMIMO_SKY_RGB;
+    let (aqua_r, aqua_g, aqua_b) = palette::XIAOMIMIMO_SKY_RGB;
+    let (red_r, red_g, red_b) = palette::XIAOMIMIMO_RED_RGB;
+
+    println!(
+        "{}",
+        "XiaomiMiMo TUI Doctor"
+            .truecolor(blue_r, blue_g, blue_b)
+            .bold()
+    );
+    println!("{}", "==================".truecolor(sky_r, sky_g, sky_b));
+    println!();
+
+    // Version info
+    println!("{}", "Version Information:".bold());
+    println!("  xiaomimimo-tui: {}", env!("CARGO_PKG_VERSION"));
+    println!("  rust: {}", rustc_version());
+    println!();
+
+    // Configuration summary
+    println!("{}", "Configuration:".bold());
+    let default_config_dir =
+        dirs::home_dir().map_or_else(|| PathBuf::from(".xiaomimimo"), |h| h.join(".xiaomimimo"));
+    let config_path = config_path_override
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var("XIAOMIMIMO_CONFIG_PATH")
+                .ok()
+                .map(PathBuf::from)
+        })
+        .unwrap_or_else(|| default_config_dir.join("config.toml"));
+
+    if config_path.exists() {
+        println!(
+            "  {} config.toml found at {}",
+            "✓".truecolor(aqua_r, aqua_g, aqua_b),
+            config_path.display()
+        );
+    } else {
+        println!(
+            "  {} config.toml not found at {} (using defaults/env)",
+            "!".truecolor(sky_r, sky_g, sky_b),
+            config_path.display()
+        );
+    }
+    println!("  workspace: {}", workspace.display());
+
+    // Check API keys
+    println!();
+    println!("{}", "API Keys:".bold());
+
+    // Report the active keyring backend (system / file-based / unavailable).
+    let secrets = xiaomimimo_secrets::Secrets::auto_detect();
+    println!("  · keyring backend: {}", secrets.backend_name());
+
+    // Per-provider state: keyring, env, config file (no values printed).
+    for (slot, env_names) in [
+        ("xiaomimimo", &["XIAOMIMIMO_API_KEY"][..]),
+        ("nvidia-nim", &["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"][..]),
+        ("openrouter", &["OPENROUTER_API_KEY"][..]),
+        ("novita", &["NOVITA_API_KEY"][..]),
+    ] {
+        let in_keyring = secrets
+            .get(slot)
+            .ok()
+            .flatten()
+            .is_some_and(|v| !v.trim().is_empty());
+        let in_env = env_names.iter().any(|n| {
+            std::env::var(n)
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .is_some()
+        });
+        let icon = if in_keyring || in_env {
+            "✓".truecolor(aqua_r, aqua_g, aqua_b)
+        } else {
+            "·".dimmed()
+        };
+        println!(
+            "  {} {slot}: keyring={}, env={}",
+            icon,
+            if in_keyring { "yes" } else { "no" },
+            if in_env { "yes" } else { "no" }
+        );
+    }
+
+    let has_api_key = if config.xiaomimimo_api_key().is_ok() {
+        println!(
+            "  {} active provider key resolved",
+            "✓".truecolor(aqua_r, aqua_g, aqua_b)
+        );
+        true
+    } else {
+        println!(
+            "  {} active provider key not configured",
+            "✗".truecolor(red_r, red_g, red_b)
+        );
+        println!("    Run 'xiaomimimo auth set --provider <name>' to save a key to the OS keyring.");
+        false
+    };
+
+    // API connectivity test
+    println!();
+    println!("{}", "API Connectivity:".bold());
+    if has_api_key {
+        print!("  {} Testing connection to XiaomiMiMo API...", "·".dimmed());
+        use std::io::Write;
+        std::io::stdout().flush().ok();
+
+        match test_api_connectivity(config).await {
+            Ok(model) => {
+                println!(
+                    "\r  {} API connection successful (model: {})",
+                    "✓".truecolor(aqua_r, aqua_g, aqua_b),
+                    model
+                );
+            }
+            Err(e) => {
+                let error_msg = e.to_string();
+                println!(
+                    "\r  {} API connection failed",
+                    "✗".truecolor(red_r, red_g, red_b)
+                );
+                if error_msg.contains("401") || error_msg.contains("Unauthorized") {
+                    println!("    Invalid API key. Check your XIAOMIMIMO_API_KEY or config.toml");
+                } else if error_msg.contains("403") || error_msg.contains("Forbidden") {
+                    println!(
+                        "    API key lacks permissions. Verify key is active at platform.xiaomimimo.com"
+                    );
+                } else if error_msg.contains("timeout") || error_msg.contains("Timeout") {
+                    println!("    Connection timed out. Check your network connection");
+                } else if error_msg.contains("dns") || error_msg.contains("resolve") {
+                    println!("    DNS resolution failed. Check your network connection");
+                } else if error_msg.contains("connect") {
+                    println!("    Connection failed. Check firewall settings or try again");
+                } else {
+                    println!("    Error: {}", error_msg);
+                }
+            }
+        }
+    } else {
+        println!("  {} Skipped (no API key configured)", "·".dimmed());
+    }
+
+    // MCP configuration
+    println!();
+    println!("{}", "MCP Servers:".bold());
+    let features = config.features();
+    if features.enabled(Feature::Mcp) {
+        println!(
+            "  {} MCP feature flag enabled",
+            "✓".truecolor(aqua_r, aqua_g, aqua_b)
+        );
+    } else {
+        println!(
+            "  {} MCP feature flag disabled",
+            "!".truecolor(sky_r, sky_g, sky_b)
+        );
+    }
+
+    let mcp_config_path = config.mcp_config_path();
+    if mcp_config_path.exists() {
+        println!(
+            "  {} MCP config found at {}",
+            "✓".truecolor(aqua_r, aqua_g, aqua_b),
+            mcp_config_path.display()
+        );
+        match load_mcp_config(&mcp_config_path) {
+            Ok(cfg) if cfg.servers.is_empty() => {
+                println!("  {} 0 server(s) configured", "·".dimmed());
+            }
+            Ok(cfg) => {
+                println!(
+                    "  {} {} server(s) configured",
+                    "·".dimmed(),
+                    cfg.servers.len()
+                );
+                for (name, server) in &cfg.servers {
+                    let status = doctor_check_mcp_server(server);
+                    let icon = match status {
+                        McpServerDoctorStatus::Ok(ref detail) => {
+                            format!(
+                                "  {} {name}: {}",
+                                "✓".truecolor(aqua_r, aqua_g, aqua_b),
+                                detail
+                            )
+                        }
+                        McpServerDoctorStatus::Warning(ref detail) => {
+                            format!(
+                                "  {} {name}: {}",
+                                "!".truecolor(sky_r, sky_g, sky_b),
+                                detail
+                            )
+                        }
+                        McpServerDoctorStatus::Error(ref detail) => {
+                            format!(
+                                "  {} {name}: {}",
+                                "✗".truecolor(red_r, red_g, red_b),
+                                detail
+                            )
+                        }
+                    };
+                    println!("{icon}");
+                    if !server.enabled {
+                        println!("      (disabled)");
+                    }
+                }
+            }
+            Err(err) => {
+                println!(
+                    "  {} MCP config parse error: {}",
+                    "✗".truecolor(red_r, red_g, red_b),
+                    err
+                );
+            }
+        }
+    } else {
+        println!(
+            "  {} MCP config not found at {}",
+            "·".dimmed(),
+            mcp_config_path.display()
+        );
+        println!("    Run `xiaomimimo mcp init` or `xiaomimimo setup --mcp`.");
+    }
+
+    // Skills configuration
+    println!();
+    println!("{}", "Skills:".bold());
+    let global_skills_dir = config.skills_dir();
+    let agents_skills_dir = workspace.join(".agents").join("skills");
+    let local_skills_dir = workspace.join("skills");
+    let selected_skills_dir = if agents_skills_dir.exists() {
+        &agents_skills_dir
+    } else if local_skills_dir.exists() {
+        &local_skills_dir
+    } else {
+        &global_skills_dir
+    };
+
+    let describe_dir = |dir: &Path| -> usize {
+        std::fs::read_dir(dir)
+            .map(|entries| entries.filter_map(std::result::Result::ok).count())
+            .unwrap_or(0)
+    };
+
+    if local_skills_dir.exists() {
+        println!(
+            "  {} local skills dir found at {} ({} items)",
+            "✓".truecolor(aqua_r, aqua_g, aqua_b),
+            local_skills_dir.display(),
+            describe_dir(&local_skills_dir)
+        );
+    } else {
+        println!(
+            "  {} local skills dir not found at {}",
+            "·".dimmed(),
+            local_skills_dir.display()
+        );
+    }
+
+    if agents_skills_dir.exists() {
+        println!(
+            "  {} .agents skills dir found at {} ({} items)",
+            "✓".truecolor(aqua_r, aqua_g, aqua_b),
+            agents_skills_dir.display(),
+            describe_dir(&agents_skills_dir)
+        );
+    } else {
+        println!(
+            "  {} .agents skills dir not found at {}",
+            "·".dimmed(),
+            agents_skills_dir.display()
+        );
+    }
+
+    if global_skills_dir.exists() {
+        println!(
+            "  {} global skills dir found at {} ({} items)",
+            "✓".truecolor(aqua_r, aqua_g, aqua_b),
+            global_skills_dir.display(),
+            describe_dir(&global_skills_dir)
+        );
+    } else {
+        println!(
+            "  {} global skills dir not found at {}",
+            "·".dimmed(),
+            global_skills_dir.display()
+        );
+    }
+
+    println!(
+        "  {} selected skills dir: {}",
+        "·".dimmed(),
+        selected_skills_dir.display()
+    );
+    if !agents_skills_dir.exists() && !local_skills_dir.exists() && !global_skills_dir.exists() {
+        println!("    Run `xiaomimimo setup --skills` (or add --local for ./skills).");
+    }
+
+    // Tools directory
+    println!();
+    println!("{}", "Tools:".bold());
+    let tools_dir = default_tools_dir();
+    if tools_dir.exists() {
+        let count = count_dir_entries(&tools_dir);
+        println!(
+            "  {} tools dir found at {} ({} items)",
+            "✓".truecolor(aqua_r, aqua_g, aqua_b),
+            tools_dir.display(),
+            count
+        );
+    } else {
+        println!(
+            "  {} tools dir not found at {}",
+            "·".dimmed(),
+            tools_dir.display()
+        );
+        println!("    Run `xiaomimimo-tui setup --tools` to scaffold a starter dir.");
+    }
+
+    // Plugins directory
+    println!();
+    println!("{}", "Plugins:".bold());
+    let plugins_dir = default_plugins_dir();
+    if plugins_dir.exists() {
+        let count = count_dir_entries(&plugins_dir);
+        println!(
+            "  {} plugins dir found at {} ({} items)",
+            "✓".truecolor(aqua_r, aqua_g, aqua_b),
+            plugins_dir.display(),
+            count
+        );
+    } else {
+        println!(
+            "  {} plugins dir not found at {}",
+            "·".dimmed(),
+            plugins_dir.display()
+        );
+        println!("    Run `xiaomimimo-tui setup --plugins` to scaffold a starter dir.");
+    }
+
+    // Platform and sandbox checks
+    println!();
+    println!("{}", "Platform:".bold());
+    println!("  OS: {}", std::env::consts::OS);
+    println!("  Arch: {}", std::env::consts::ARCH);
+
+    let sandbox = crate::sandbox::get_platform_sandbox();
+    if let Some(kind) = sandbox {
+        println!(
+            "  {} sandbox available: {}",
+            "✓".truecolor(aqua_r, aqua_g, aqua_b),
+            kind
+        );
+    } else {
+        println!(
+            "  {} sandbox not available (commands run best-effort)",
+            "!".truecolor(sky_r, sky_g, sky_b)
+        );
+    }
+
+    println!();
+    println!(
+        "{}",
+        "All checks complete!"
+            .truecolor(aqua_r, aqua_g, aqua_b)
+            .bold()
+    );
+}
+
+/// Machine-readable counterpart to `run_doctor`. Skips the live API call so it
+/// is safe to run in CI and from non-interactive scripts.
+fn run_doctor_json(
+    config: &Config,
+    workspace: &Path,
+    config_path_override: Option<&Path>,
+) -> Result<()> {
+    use serde_json::json;
+
+    let default_config_dir =
+        dirs::home_dir().map_or_else(|| PathBuf::from(".xiaomimimo"), |h| h.join(".xiaomimimo"));
+    let config_path = config_path_override
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var("XIAOMIMIMO_CONFIG_PATH")
+                .ok()
+                .map(PathBuf::from)
+        })
+        .unwrap_or_else(|| default_config_dir.join("config.toml"));
+
+    let api_key_state = match resolve_api_key_source(config) {
+        ApiKeySource::Env => "env",
+        ApiKeySource::Config => "config",
+        ApiKeySource::Missing => "missing",
+    };
+
+    let mcp_config_path = config.mcp_config_path();
+    let mcp_present = mcp_config_path.exists();
+    let mcp_summary = match load_mcp_config(&mcp_config_path) {
+        Ok(cfg) => {
+            let servers: Vec<serde_json::Value> = cfg
+                .servers
+                .iter()
+                .map(|(name, server)| {
+                    let status = doctor_check_mcp_server(server);
+                    let (kind, detail) = match &status {
+                        McpServerDoctorStatus::Ok(d) => ("ok", d.clone()),
+                        McpServerDoctorStatus::Warning(d) => ("warning", d.clone()),
+                        McpServerDoctorStatus::Error(d) => ("error", d.clone()),
+                    };
+                    json!({
+                        "name": name,
+                        "enabled": server.enabled && !server.disabled,
+                        "status": kind,
+                        "detail": detail,
+                    })
+                })
+                .collect();
+            json!({
+                "config_path": mcp_config_path.display().to_string(),
+                "present": mcp_present,
+                "servers": servers,
+            })
+        }
+        Err(err) => json!({
+            "config_path": mcp_config_path.display().to_string(),
+            "present": mcp_present,
+            "servers": [],
+            "error": err.to_string(),
+        }),
+    };
+
+    let global_skills_dir = config.skills_dir();
+    let agents_skills_dir = workspace.join(".agents").join("skills");
+    let local_skills_dir = workspace.join("skills");
+    let selected_skills_dir = if agents_skills_dir.exists() {
+        agents_skills_dir.clone()
+    } else if local_skills_dir.exists() {
+        local_skills_dir.clone()
+    } else {
+        global_skills_dir.clone()
+    };
+
+    let tools_dir = default_tools_dir();
+    let plugins_dir = default_plugins_dir();
+
+    let report = json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "config_path": config_path.display().to_string(),
+        "config_present": config_path.exists(),
+        "workspace": workspace.display().to_string(),
+        "api_key": {
+            "source": api_key_state,
+        },
+        "base_url": config
+            .base_url
+            .clone()
+            .unwrap_or_else(|| "https://token-plan-cn.xiaomimimo.com/v1".to_string()),
+        "default_text_model": config
+            .default_text_model
+            .clone()
+            .unwrap_or_else(|| DEFAULT_TEXT_MODEL.to_string()),
+        "mcp": mcp_summary,
+        "skills": {
+            "selected": selected_skills_dir.display().to_string(),
+            "global": {
+                "path": global_skills_dir.display().to_string(),
+                "present": global_skills_dir.exists(),
+                "count": skills_count_for(&global_skills_dir),
+            },
+            "agents": {
+                "path": agents_skills_dir.display().to_string(),
+                "present": agents_skills_dir.exists(),
+                "count": skills_count_for(&agents_skills_dir),
+            },
+            "local": {
+                "path": local_skills_dir.display().to_string(),
+                "present": local_skills_dir.exists(),
+                "count": skills_count_for(&local_skills_dir),
+            },
+        },
+        "tools": {
+            "path": tools_dir.display().to_string(),
+            "present": tools_dir.exists(),
+            "count": if tools_dir.exists() { count_dir_entries(&tools_dir) } else { 0 },
+        },
+        "plugins": {
+            "path": plugins_dir.display().to_string(),
+            "present": plugins_dir.exists(),
+            "count": if plugins_dir.exists() { count_dir_entries(&plugins_dir) } else { 0 },
+        },
+        "sandbox": match crate::sandbox::get_platform_sandbox() {
+            Some(kind) => json!({"available": true, "kind": kind.to_string()}),
+            None => json!({"available": false, "kind": null}),
+        },
+        "platform": {
+            "os": std::env::consts::OS,
+            "arch": std::env::consts::ARCH,
+        },
+        "api_connectivity": {
+            "checked": false,
+            "note": "Skipped in --json mode; run `xiaomimimo-tui doctor` for a live check.",
+        },
+        "capability": provider_capability_report(config),
+    });
+
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
+}
+
+/// Build the `capability` section for the machine-readable doctor report.
+///
+/// Returns a JSON value with the resolved provider, resolved model, context
+/// window, max output, thinking support, cache telemetry support, request
+/// payload mode, and any deprecation notice for legacy aliases.
+fn provider_capability_report(config: &Config) -> serde_json::Value {
+    use serde_json::json;
+
+    let provider = config.api_provider();
+    let model = config.default_model();
+
+    // Detect deprecation for the raw model name (before provider-specific mapping).
+    let raw_model = config
+        .default_text_model
+        .as_deref()
+        .unwrap_or(DEFAULT_TEXT_MODEL);
+    let raw_deprecation = crate::config::deprecation_for_model(raw_model);
+
+    let cap = crate::config::provider_capability(provider, &model);
+
+    let deprecation = raw_deprecation.map(|d| {
+        json!({
+            "alias": d.alias,
+            "replacement": d.replacement,
+            "notice": d.notice,
+        })
+    });
+
+    json!({
+        "resolved_provider": provider.as_str(),
+        "resolved_model": cap.resolved_model,
+        "context_window": cap.context_window,
+        "max_output": cap.max_output,
+        "thinking_supported": cap.thinking_supported,
+        "cache_telemetry_supported": cap.cache_telemetry_supported,
+        "request_payload_mode": serde_json::to_value(cap.request_payload_mode).unwrap_or_default(),
+        "deprecation": deprecation,
+    })
+}
+
+fn run_execpolicy_command(command: ExecpolicyCommand) -> Result<()> {
+    match command.command {
+        ExecpolicySubcommand::Check(cmd) => cmd.run(),
+    }
+}
+
+fn run_features_command(config: &Config, command: FeaturesCli) -> Result<()> {
+    match command.command {
+        FeaturesSubcommand::List => run_features_list(config),
+    }
+}
+
+fn stage_str(stage: features::Stage) -> &'static str {
+    match stage {
+        features::Stage::Experimental => "experimental",
+        features::Stage::Beta => "beta",
+        features::Stage::Stable => "stable",
+        features::Stage::Deprecated => "deprecated",
+        features::Stage::Removed => "removed",
+    }
+}
+
+fn run_features_list(config: &Config) -> Result<()> {
+    let features = config.features();
+    println!("feature\tstage\tenabled");
+    for spec in features::FEATURES {
+        let enabled = features.enabled(spec.id);
+        println!("{}\t{}\t{enabled}", spec.key, stage_str(spec.stage));
+    }
+    Ok(())
+}
+
+async fn run_models(config: &Config, args: ModelsArgs) -> Result<()> {
+    use crate::client::XiaomiMiMoClient;
+
+    let client = XiaomiMiMoClient::new(config)?;
+    let mut models = client.list_models().await?;
+    models.sort_by(|a, b| a.id.cmp(&b.id));
+
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&models)?);
+        return Ok(());
+    }
+
+    if models.is_empty() {
+        println!("No models returned by the API.");
+        return Ok(());
+    }
+
+    let default_model = config.default_model();
+
+    println!("Available models (default: {default_model})");
+    for model in models {
+        let marker = if model.id == default_model { "*" } else { " " };
+        if let Some(owner) = model.owned_by {
+            println!("{marker} {} ({owner})", model.id);
+        } else {
+            println!("{marker} {}", model.id);
+        }
+    }
+
+    Ok(())
+}
+
+/// Test API connectivity by making a minimal request
+async fn test_api_connectivity(config: &Config) -> Result<String> {
+    use crate::client::XiaomiMiMoClient;
+    use crate::models::{ContentBlock, Message, MessageRequest};
+
+    let client = XiaomiMiMoClient::new(config)?;
+    let model = client.model().to_string();
+
+    // Minimal request: single word prompt, 1 max token
+    let request = MessageRequest {
+        model: model.clone(),
+        messages: vec![Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::Text {
+                text: "hi".to_string(),
+                cache_control: None,
+            }],
+        }],
+        max_tokens: 1,
+        system: None,
+        tools: None,
+        tool_choice: None,
+        metadata: None,
+        thinking: None,
+        reasoning_effort: None,
+        stream: Some(false),
+        temperature: None,
+        top_p: None,
+    };
+
+    // Use tokio timeout to catch hanging requests
+    let timeout_duration = std::time::Duration::from_secs(15);
+    match tokio::time::timeout(timeout_duration, client.create_message(request)).await {
+        Ok(Ok(_response)) => Ok(model),
+        Ok(Err(e)) => Err(e),
+        Err(_) => anyhow::bail!("Request timeout after 15 seconds"),
+    }
+}
+
+fn rustc_version() -> String {
+    // Try to get rustc version, fall back to "unknown"
+    std::process::Command::new("rustc")
+        .arg("--version")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map_or_else(|| "unknown".to_string(), |s| s.trim().to_string())
+}
+
+/// List saved sessions
+fn list_sessions(limit: usize, search: Option<String>) -> Result<()> {
+    use crate::palette;
+    use colored::Colorize;
+    use session_manager::{SessionManager, format_session_line};
+
+    let (blue_r, blue_g, blue_b) = palette::XIAOMIMIMO_BLUE_RGB;
+    let (sky_r, sky_g, sky_b) = palette::XIAOMIMIMO_SKY_RGB;
+    let (aqua_r, aqua_g, aqua_b) = palette::XIAOMIMIMO_SKY_RGB;
+
+    let manager = SessionManager::default_location()?;
+
+    let sessions = if let Some(query) = search {
+        manager.search_sessions(&query)?
+    } else {
+        manager.list_sessions()?
+    };
+
+    if sessions.is_empty() {
+        println!("{}", "No sessions found.".truecolor(sky_r, sky_g, sky_b));
+        println!(
+            "Start a new session with: {}",
+            "xiaomimimo".truecolor(blue_r, blue_g, blue_b)
+        );
+        return Ok(());
+    }
+
+    println!(
+        "{}",
+        "Saved Sessions".truecolor(blue_r, blue_g, blue_b).bold()
+    );
+    println!("{}", "==============".truecolor(sky_r, sky_g, sky_b));
+    println!();
+
+    for (i, session) in sessions.iter().take(limit).enumerate() {
+        let line = format_session_line(session);
+        if i == 0 {
+            println!("  {} {}", "*".truecolor(aqua_r, aqua_g, aqua_b), line);
+        } else {
+            println!("    {line}");
+        }
+    }
+
+    let total = sessions.len();
+    if total > limit {
+        println!();
+        println!(
+            "  {} more session(s). Use --limit to show more.",
+            total - limit
+        );
+    }
+
+    println!();
+    println!(
+        "Resume with: {} {}",
+        "xiaomimimo --resume".truecolor(blue_r, blue_g, blue_b),
+        "<session-id>".dimmed()
+    );
+    println!(
+        "Continue latest: {}",
+        "xiaomimimo --continue".truecolor(blue_r, blue_g, blue_b)
+    );
+
+    Ok(())
+}
+
+/// Initialize a new project with AGENTS.md
+fn init_project() -> Result<()> {
+    use crate::palette;
+    use colored::Colorize;
+    use project_context::create_default_agents_md;
+
+    let (sky_r, sky_g, sky_b) = palette::XIAOMIMIMO_SKY_RGB;
+    let (aqua_r, aqua_g, aqua_b) = palette::XIAOMIMIMO_SKY_RGB;
+    let (red_r, red_g, red_b) = palette::XIAOMIMIMO_RED_RGB;
+
+    let workspace = std::env::current_dir()?;
+    let agents_path = workspace.join("AGENTS.md");
+
+    if agents_path.exists() {
+        println!(
+            "{} AGENTS.md already exists at {}",
+            "!".truecolor(sky_r, sky_g, sky_b),
+            agents_path.display()
+        );
+        return Ok(());
+    }
+
+    match create_default_agents_md(&workspace) {
+        Ok(path) => {
+            println!(
+                "{} Created {}",
+                "✓".truecolor(aqua_r, aqua_g, aqua_b),
+                path.display()
+            );
+            println!();
+            println!("Edit this file to customize how the AI agent works with your project.");
+            println!("The instructions will be loaded automatically when you run xiaomimimo.");
+        }
+        Err(e) => {
+            println!(
+                "{} Failed to create AGENTS.md: {}",
+                "✗".truecolor(red_r, red_g, red_b),
+                e
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn resolve_workspace(cli: &Cli) -> PathBuf {
+    cli.workspace
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+}
+
+fn load_config_from_cli(cli: &Cli) -> Result<Config> {
+    let profile = cli
+        .profile
+        .clone()
+        .or_else(|| std::env::var("XIAOMIMIMO_PROFILE").ok());
+    let mut config = Config::load(cli.config.clone(), profile.as_deref())?;
+    cli.feature_toggles.apply(&mut config)?;
+    Ok(config)
+}
+
+fn read_api_key_from_stdin() -> Result<String> {
+    let mut stdin = io::stdin();
+    if stdin.is_terminal() {
+        bail!("No API key provided. Pass --api-key or pipe one via stdin.");
+    }
+    let mut buffer = String::new();
+    stdin.read_to_string(&mut buffer)?;
+    let api_key = buffer.trim().to_string();
+    if api_key.is_empty() {
+        bail!("No API key provided via stdin.");
+    }
+    Ok(api_key)
+}
+
+fn run_login(api_key: Option<String>) -> Result<()> {
+    let api_key = match api_key {
+        Some(key) => key,
+        None => read_api_key_from_stdin()?,
+    };
+    let path = config::save_api_key(&api_key)?;
+    println!("Saved API key to {}", path.display());
+    Ok(())
+}
+
+fn run_logout() -> Result<()> {
+    config::clear_api_key()?;
+    println!("Cleared saved API key.");
+    Ok(())
+}
+
+fn resolve_session_id(session_id: Option<String>, last: bool) -> Result<String> {
+    if last {
+        return Ok("latest".to_string());
+    }
+    if let Some(id) = session_id {
+        return Ok(id);
+    }
+    pick_session_id()
+}
+
+fn fork_session(session_id: Option<String>, last: bool) -> Result<String> {
+    let manager = SessionManager::default_location()?;
+    let saved = if last {
+        let Some(meta) = manager.get_latest_session()? else {
+            bail!("No saved sessions found.");
+        };
+        manager.load_session(&meta.id)?
+    } else {
+        let id = resolve_session_id(session_id, false)?;
+        manager.load_session_by_prefix(&id)?
+    };
+
+    let system_prompt = saved
+        .system_prompt
+        .as_ref()
+        .map(|text| SystemPrompt::Text(text.clone()));
+    let forked = create_saved_session(
+        &saved.messages,
+        &saved.metadata.model,
+        &saved.metadata.workspace,
+        saved.metadata.total_tokens,
+        system_prompt.as_ref(),
+    );
+    manager.save_session(&forked)?;
+    Ok(forked.metadata.id)
+}
+
+fn pick_session_id() -> Result<String> {
+    let manager = SessionManager::default_location()?;
+    let sessions = manager.list_sessions()?;
+    if sessions.is_empty() {
+        bail!("No saved sessions found.");
+    }
+
+    println!("Select a session to resume:");
+    for (idx, session) in sessions.iter().enumerate() {
+        println!("  {:>2}. {} ({})", idx + 1, session.title, session.id);
+    }
+    print!("Enter a number (or press Enter to cancel): ");
+    io::stdout().flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let input = input.trim();
+    if input.is_empty() {
+        bail!("No session selected.");
+    }
+    let idx: usize = input
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Invalid input"))?;
+    let session = sessions
+        .get(idx.saturating_sub(1))
+        .ok_or_else(|| anyhow::anyhow!("Selection out of range"))?;
+    Ok(session.id.clone())
+}
+
+async fn run_review(config: &Config, args: ReviewArgs) -> Result<()> {
+    use crate::client::XiaomiMiMoClient;
+
+    let diff = collect_diff(&args)?;
+    if diff.trim().is_empty() {
+        bail!("No diff to review.");
+    }
+
+    let model = args
+        .model
+        .or_else(|| config.default_text_model.clone())
+        .unwrap_or_else(|| config.default_model());
+
+    let system = SystemPrompt::Text(
+        "You are a senior code reviewer. Focus on bugs, risks, behavioral regressions, and missing tests. \
+Provide findings ordered by severity with file references, then open questions, then a brief summary."
+            .to_string(),
+    );
+    let user_prompt =
+        format!("Review the following diff and provide feedback:\n\n{diff}\n\nEnd of diff.");
+
+    let client = XiaomiMiMoClient::new(config)?;
+    let request = MessageRequest {
+        model: model.clone(),
+        messages: vec![Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::Text {
+                text: user_prompt,
+                cache_control: None,
+            }],
+        }],
+        max_tokens: 4096,
+        system: Some(system),
+        tools: None,
+        tool_choice: None,
+        metadata: None,
+        thinking: None,
+        reasoning_effort: None,
+        stream: Some(false),
+        temperature: Some(0.2),
+        top_p: Some(0.9),
+    };
+
+    let response = client.create_message(request).await?;
+    let mut output = String::new();
+    for block in response.content {
+        if let ContentBlock::Text { text, .. } = block {
+            output.push_str(&text);
+        }
+    }
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "mode": "review",
+                "model": model,
+                "success": true,
+                "content": output
+            }))?
+        );
+    } else {
+        println!("{output}");
+    }
+    Ok(())
+}
+
+fn collect_diff(args: &ReviewArgs) -> Result<String> {
+    let mut cmd = Command::new("git");
+    cmd.arg("diff");
+    if args.staged {
+        cmd.arg("--cached");
+    }
+    if let Some(base) = &args.base {
+        cmd.arg(format!("{base}...HEAD"));
+    }
+    if let Some(path) = &args.path {
+        cmd.arg("--").arg(path);
+    }
+
+    let output = cmd
+        .output()
+        .map_err(|e| anyhow::anyhow!("Failed to run git diff. Is git installed? ({})", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git diff failed: {}", stderr.trim());
+    }
+    let mut diff = String::from_utf8_lossy(&output.stdout).to_string();
+    if diff.len() > args.max_chars {
+        diff = crate::utils::truncate_with_ellipsis(&diff, args.max_chars, "\n...[truncated]\n");
+    }
+    Ok(diff)
+}
+
+fn run_apply(args: ApplyArgs) -> Result<()> {
+    let patch = if let Some(path) = args.patch_file {
+        std::fs::read_to_string(&path)
+            .map_err(|e| anyhow::anyhow!("Failed to read patch {}: {}", path.display(), e))?
+    } else {
+        read_patch_from_stdin()?
+    };
+    if patch.trim().is_empty() {
+        bail!("Patch is empty.");
+    }
+
+    let mut tmp = NamedTempFile::new()?;
+    tmp.write_all(patch.as_bytes())?;
+    let tmp_path = tmp.path().to_path_buf();
+
+    let output = Command::new("git")
+        .arg("apply")
+        .arg("--whitespace=nowarn")
+        .arg(&tmp_path)
+        .output()
+        .map_err(|e| anyhow::anyhow!("Failed to run git apply: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git apply failed: {}", stderr.trim());
+    }
+    println!("Applied patch successfully.");
+    Ok(())
+}
+
+fn read_patch_from_stdin() -> Result<String> {
+    let mut stdin = io::stdin();
+    if stdin.is_terminal() {
+        bail!("No patch file provided and stdin is empty.");
+    }
+    let mut buffer = String::new();
+    stdin.read_to_string(&mut buffer)?;
+    Ok(buffer)
+}
+
+async fn run_mcp_command(config: &Config, command: McpCommand) -> Result<()> {
+    let config_path = config.mcp_config_path();
+    match command {
+        McpCommand::Init { force } => {
+            let status = init_mcp_config(&config_path, force)?;
+            match status {
+                WriteStatus::Created => {
+                    println!("Created MCP config at {}", config_path.display());
+                }
+                WriteStatus::Overwritten => {
+                    println!("Overwrote MCP config at {}", config_path.display());
+                }
+                WriteStatus::SkippedExists => {
+                    println!(
+                        "MCP config already exists at {} (use --force to overwrite)",
+                        config_path.display()
+                    );
+                }
+            }
+            println!("Edit the file, then run `xiaomimimo mcp list` or `xiaomimimo mcp tools`.");
+            Ok(())
+        }
+        McpCommand::List => {
+            let cfg = load_mcp_config(&config_path)?;
+            if cfg.servers.is_empty() {
+                println!("No MCP servers configured in {}", config_path.display());
+                return Ok(());
+            }
+            println!("MCP servers ({}):", cfg.servers.len());
+            for (name, server) in cfg.servers {
+                let status = if server.enabled && !server.disabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                };
+                let args = if server.args.is_empty() {
+                    "".to_string()
+                } else {
+                    format!(" {}", server.args.join(" "))
+                };
+                let cmd_str = if let Some(cmd) = server.command {
+                    format!("{cmd}{args}")
+                } else if let Some(url) = server.url {
+                    url
+                } else {
+                    "unknown".to_string()
+                };
+                let required = if server.required { " required" } else { "" };
+                println!("  - {name} [{status}{required}] {cmd_str}");
+            }
+            Ok(())
+        }
+        McpCommand::Connect { server } => {
+            let mut pool = McpPool::from_config_path(&config_path)?;
+            if let Some(name) = server {
+                pool.get_or_connect(&name).await?;
+                println!("Connected to MCP server: {name}");
+            } else {
+                let errors = pool.connect_all().await;
+                if errors.is_empty() {
+                    println!("Connected to all configured MCP servers.");
+                } else {
+                    for (name, err) in errors {
+                        eprintln!("Failed to connect {name}: {err}");
+                    }
+                }
+            }
+            Ok(())
+        }
+        McpCommand::Tools { server } => {
+            let mut pool = McpPool::from_config_path(&config_path)?;
+            if let Some(name) = server {
+                let conn = pool.get_or_connect(&name).await?;
+                if conn.tools().is_empty() {
+                    println!("No tools found for MCP server: {name}");
+                } else {
+                    println!("Tools for {name}:");
+                    for tool in conn.tools() {
+                        println!(
+                            "  - {}{}",
+                            tool.name,
+                            tool.description
+                                .as_ref()
+                                .map_or(String::new(), |d| format!(": {d}"))
+                        );
+                    }
+                }
+            } else {
+                let _ = pool.connect_all().await;
+                let tools = pool.all_tools();
+                if tools.is_empty() {
+                    println!("No MCP tools discovered.");
+                } else {
+                    println!("MCP tools:");
+                    for (name, tool) in tools {
+                        println!(
+                            "  - {}{}",
+                            name,
+                            tool.description
+                                .as_ref()
+                                .map_or(String::new(), |d| format!(": {d}"))
+                        );
+                    }
+                }
+            }
+            Ok(())
+        }
+        McpCommand::Add {
+            name,
+            command,
+            url,
+            args,
+        } => {
+            if command.is_none() && url.is_none() {
+                bail!("Provide either --command or --url for `mcp add`.");
+            }
+            let mut cfg = load_mcp_config(&config_path)?;
+            cfg.servers.insert(
+                name.clone(),
+                McpServerConfig {
+                    command,
+                    args,
+                    env: std::collections::HashMap::new(),
+                    url,
+                    connect_timeout: None,
+                    execute_timeout: None,
+                    read_timeout: None,
+                    disabled: false,
+                    enabled: true,
+                    required: false,
+                    enabled_tools: Vec::new(),
+                    disabled_tools: Vec::new(),
+                },
+            );
+            save_mcp_config(&config_path, &cfg)?;
+            println!("Added MCP server '{name}' in {}", config_path.display());
+            Ok(())
+        }
+        McpCommand::Remove { name } => {
+            let mut cfg = load_mcp_config(&config_path)?;
+            if cfg.servers.remove(&name).is_none() {
+                bail!("MCP server '{name}' not found");
+            }
+            save_mcp_config(&config_path, &cfg)?;
+            println!("Removed MCP server '{name}'");
+            Ok(())
+        }
+        McpCommand::Enable { name } => {
+            let mut cfg = load_mcp_config(&config_path)?;
+            let server = cfg
+                .servers
+                .get_mut(&name)
+                .ok_or_else(|| anyhow!("MCP server '{name}' not found"))?;
+            server.enabled = true;
+            server.disabled = false;
+            save_mcp_config(&config_path, &cfg)?;
+            println!("Enabled MCP server '{name}'");
+            Ok(())
+        }
+        McpCommand::Disable { name } => {
+            let mut cfg = load_mcp_config(&config_path)?;
+            let server = cfg
+                .servers
+                .get_mut(&name)
+                .ok_or_else(|| anyhow!("MCP server '{name}' not found"))?;
+            server.enabled = false;
+            server.disabled = true;
+            save_mcp_config(&config_path, &cfg)?;
+            println!("Disabled MCP server '{name}'");
+            Ok(())
+        }
+        McpCommand::Validate => {
+            let mut pool = McpPool::from_config_path(&config_path)?;
+            let errors = pool.connect_all().await;
+            if errors.is_empty() {
+                println!("MCP config is valid. All enabled servers connected.");
+                return Ok(());
+            }
+            eprintln!("MCP validation failed:");
+            for (name, err) in errors {
+                eprintln!("  - {name}: {err}");
+            }
+            bail!("one or more MCP servers failed validation");
+        }
+        McpCommand::AddSelf { name, workspace } => {
+            let exe_path = std::env::current_exe()
+                .map_err(|e| anyhow!("Cannot resolve current binary path: {e}"))?;
+            let exe_str = exe_path.to_string_lossy().to_string();
+
+            let mut args = vec!["serve".to_string(), "--mcp".to_string()];
+            if let Some(ref ws) = workspace {
+                args.push("--workspace".to_string());
+                args.push(ws.clone());
+            }
+
+            let mut cfg = load_mcp_config(&config_path)?;
+            if cfg.servers.contains_key(&name) {
+                bail!(
+                    "MCP server '{name}' already exists in {}. Use `xiaomimimo mcp remove {name}` first, or choose a different --name.",
+                    config_path.display()
+                );
+            }
+            cfg.servers.insert(
+                name.clone(),
+                McpServerConfig {
+                    command: Some(exe_str.clone()),
+                    args,
+                    env: std::collections::HashMap::new(),
+                    url: None,
+                    connect_timeout: None,
+                    execute_timeout: None,
+                    read_timeout: None,
+                    disabled: false,
+                    enabled: true,
+                    required: false,
+                    enabled_tools: Vec::new(),
+                    disabled_tools: Vec::new(),
+                },
+            );
+            save_mcp_config(&config_path, &cfg)?;
+            println!(
+                "Registered XiaomiMiMo as MCP server '{name}' in {}",
+                config_path.display()
+            );
+            println!("  command: {exe_str}");
+            println!(
+                "  args:    serve --mcp{}",
+                workspace.map_or(String::new(), |ws| format!(" --workspace {ws}"))
+            );
+            println!();
+            println!("Tip: Use `xiaomimimo mcp validate` to test the connection.");
+            println!("     Use `xiaomimimo serve --http` for the HTTP/SSE runtime API instead.");
+            Ok(())
+        }
+    }
+}
+
+fn load_mcp_config(path: &Path) -> Result<McpConfig> {
+    if !path.exists() {
+        return Ok(McpConfig::default());
+    }
+    let contents = std::fs::read_to_string(path)
+        .map_err(|e| anyhow::anyhow!("Failed to read MCP config {}: {}", path.display(), e))?;
+    let cfg: McpConfig = serde_json::from_str(&contents)
+        .map_err(|e| anyhow::anyhow!("Failed to parse MCP config: {e}"))?;
+    Ok(cfg)
+}
+
+/// Diagnostic status for an MCP server entry.
+#[derive(Debug)]
+enum McpServerDoctorStatus {
+    Ok(String),
+    Warning(String),
+    Error(String),
+}
+
+/// Check an MCP server config entry for common issues.
+fn doctor_check_mcp_server(server: &McpServerConfig) -> McpServerDoctorStatus {
+    // No command or URL — incomplete entry.
+    if server.command.is_none() && server.url.is_none() {
+        return McpServerDoctorStatus::Error("no command or url configured".to_string());
+    }
+
+    // URL-based server — just report the URL.
+    if let Some(ref url) = server.url {
+        return McpServerDoctorStatus::Ok(format!("HTTP/SSE server at {url}"));
+    }
+
+    // Command-based: validate command path exists.
+    let cmd = server.command.as_deref().unwrap_or("");
+    if cmd.is_empty() {
+        return McpServerDoctorStatus::Error("empty command".to_string());
+    }
+
+    let cmd_path = Path::new(cmd);
+    // Also accept Unix-style `/` prefix on Windows, where Path::is_absolute()
+    // requires a drive letter.
+    let is_absolute = cmd_path.is_absolute() || cmd.starts_with('/');
+
+    if is_absolute && !cmd_path.exists() {
+        return McpServerDoctorStatus::Error(format!("command not found: {cmd}"));
+    }
+
+    // Detect self-hosted XiaomiMiMo server entries.
+    let is_self_hosted = server
+        .args
+        .windows(2)
+        .any(|w| w[0] == "serve" && w[1] == "--mcp");
+
+    let args_str = server.args.join(" ");
+    if is_self_hosted {
+        if is_absolute {
+            McpServerDoctorStatus::Ok(format!("self-hosted MCP server ({cmd} {args_str})"))
+        } else {
+            McpServerDoctorStatus::Warning(format!(
+                "self-hosted MCP server uses relative command \"{cmd}\" — consider using an absolute path"
+            ))
+        }
+    } else {
+        McpServerDoctorStatus::Ok(format!(
+            "stdio server ({cmd}{})",
+            if args_str.is_empty() {
+                String::new()
+            } else {
+                format!(" {args_str}")
+            }
+        ))
+    }
+}
+
+fn save_mcp_config(path: &Path, cfg: &McpConfig) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!("Failed to create MCP config directory {}", parent.display())
+        })?;
+    }
+    let rendered = serde_json::to_string_pretty(cfg)
+        .map_err(|e| anyhow!("Failed to serialize MCP config: {e}"))?;
+    std::fs::write(path, rendered)
+        .map_err(|e| anyhow!("Failed to write MCP config {}: {}", path.display(), e))?;
+    Ok(())
+}
+
+fn run_sandbox_command(args: SandboxArgs) -> Result<()> {
+    use crate::sandbox::{CommandSpec, SandboxManager};
+
+    let SandboxCommand::Run {
+        policy,
+        network,
+        writable_root,
+        exclude_tmpdir,
+        exclude_slash_tmp,
+        cwd,
+        timeout_ms,
+        command,
+    } = args.command;
+
+    let policy = parse_sandbox_policy(
+        &policy,
+        network,
+        writable_root,
+        exclude_tmpdir,
+        exclude_slash_tmp,
+    )?;
+    let cwd = cwd.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let timeout = Duration::from_millis(timeout_ms.clamp(1000, 600_000));
+
+    let (program, args) = command
+        .split_first()
+        .ok_or_else(|| anyhow::anyhow!("Command is required"))?;
+    let spec =
+        CommandSpec::program(program, args.to_vec(), cwd.clone(), timeout).with_policy(policy);
+    let manager = SandboxManager::new();
+    let exec_env = manager.prepare(&spec);
+
+    let mut cmd = Command::new(exec_env.program());
+    cmd.args(exec_env.args())
+        .current_dir(&exec_env.cwd)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (key, value) in &exec_env.env {
+        cmd.env(key, value);
+    }
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("Failed to run command: {e}"))?;
+    let stdout_handle = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("stdout unavailable"))?;
+    let stderr_handle = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("stderr unavailable"))?;
+
+    let timeout = exec_env.timeout;
+    let stdout_thread = std::thread::spawn(move || {
+        let mut reader = stdout_handle;
+        let mut buf = Vec::new();
+        let _ = reader.read_to_end(&mut buf);
+        buf
+    });
+    let stderr_thread = std::thread::spawn(move || {
+        let mut reader = stderr_handle;
+        let mut buf = Vec::new();
+        let _ = reader.read_to_end(&mut buf);
+        buf
+    });
+
+    if let Some(status) = child.wait_timeout(timeout)? {
+        let stdout = stdout_thread.join().unwrap_or_default();
+        let stderr = stderr_thread.join().unwrap_or_default();
+        let stderr_str = String::from_utf8_lossy(&stderr);
+        let exit_code = status.code().unwrap_or(-1);
+        let sandbox_type = exec_env.sandbox_type;
+        let sandbox_denied = SandboxManager::was_denied(sandbox_type, exit_code, &stderr_str);
+
+        if !stdout.is_empty() {
+            print!("{}", String::from_utf8_lossy(&stdout));
+        }
+        if !stderr.is_empty() {
+            eprint!("{}", stderr_str);
+        }
+        if sandbox_denied {
+            eprintln!(
+                "{}",
+                SandboxManager::denial_message(sandbox_type, &stderr_str)
+            );
+        }
+
+        if !status.success() {
+            bail!("Command failed with exit code {exit_code}");
+        }
+    } else {
+        let _ = child.kill();
+        let _ = child.wait();
+        bail!("Command timed out after {}ms", timeout.as_millis());
+    }
+    Ok(())
+}
+
+fn parse_sandbox_policy(
+    policy: &str,
+    network: bool,
+    writable_root: Vec<PathBuf>,
+    exclude_tmpdir: bool,
+    exclude_slash_tmp: bool,
+) -> Result<crate::sandbox::SandboxPolicy> {
+    use crate::sandbox::SandboxPolicy;
+
+    match policy {
+        "danger-full-access" => Ok(SandboxPolicy::DangerFullAccess),
+        "read-only" => Ok(SandboxPolicy::ReadOnly),
+        "external-sandbox" => Ok(SandboxPolicy::ExternalSandbox {
+            network_access: network,
+        }),
+        "workspace-write" => Ok(SandboxPolicy::WorkspaceWrite {
+            writable_roots: writable_root,
+            network_access: network,
+            exclude_tmpdir,
+            exclude_slash_tmp,
+        }),
+        other => bail!("Unknown sandbox policy: {other}"),
+    }
+}
+
+fn should_use_alt_screen(cli: &Cli, config: &Config) -> bool {
+    if cli.no_alt_screen {
+        return false;
+    }
+
+    let mode = config
+        .tui
+        .as_ref()
+        .and_then(|tui| tui.alternate_screen.as_deref())
+        .unwrap_or("auto")
+        .to_ascii_lowercase();
+
+    match mode.as_str() {
+        "always" => true,
+        "never" => false,
+        _ => !is_zellij(),
+    }
+}
+
+fn should_use_mouse_capture(cli: &Cli, config: &Config, use_alt_screen: bool) -> bool {
+    if !use_alt_screen || cli.no_mouse_capture {
+        return false;
+    }
+    if cli.mouse_capture {
+        return true;
+    }
+    config
+        .tui
+        .as_ref()
+        .and_then(|tui| tui.mouse_capture)
+        .unwrap_or(true)
+}
+
+fn is_zellij() -> bool {
+    std::env::var_os("ZELLIJ").is_some()
+}
+
+async fn run_interactive(
+    cli: &Cli,
+    config: &Config,
+    resume_session_id: Option<String>,
+) -> Result<()> {
+    let workspace = cli
+        .workspace
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let model = config.default_model();
+    let max_subagents = cli.max_subagents.map_or_else(
+        || config.max_subagents(),
+        |value| value.clamp(1, MAX_SUBAGENTS),
+    );
+    let use_alt_screen = should_use_alt_screen(cli, config);
+    let use_mouse_capture = should_use_mouse_capture(cli, config, use_alt_screen);
+    let use_bracketed_paste = crate::settings::Settings::load()
+        .map(|s| s.bracketed_paste)
+        .unwrap_or(true);
+
+    // Auto-install bundled system skills (e.g. skill-creator) on first launch.
+    // Errors are non-fatal: log a warning and continue.
+    let skills_dir = config.skills_dir();
+    if let Err(e) = crate::skills::install_system_skills(&skills_dir) {
+        logging::warn(format!("Failed to install system skills: {e}"));
+    }
+
+    // Prune stale workspace snapshots from prior sessions (7-day default).
+    // Non-fatal: a flaky disk, missing `git`, or read-only home should
+    // never block the TUI from starting.
+    let snapshots = config.snapshots_config();
+    if snapshots.enabled {
+        session_manager::prune_workspace_snapshots(&workspace, snapshots.max_age());
+    }
+
+    tui::run_tui(
+        config,
+        tui::TuiOptions {
+            model,
+            workspace,
+            allow_shell: cli.yolo || config.allow_shell(),
+            use_alt_screen,
+            use_mouse_capture,
+            use_bracketed_paste,
+            skills_dir,
+            memory_path: config.memory_path(),
+            notes_path: config.notes_path(),
+            mcp_config_path: config.mcp_config_path(),
+            use_memory: false,
+            start_in_agent_mode: cli.yolo,
+            skip_onboarding: cli.skip_onboarding,
+            yolo: cli.yolo, // YOLO mode auto-approves all tool executions
+            resume_session_id,
+            max_subagents,
+        },
+    )
+    .await
+}
+
+async fn run_one_shot(config: &Config, model: &str, prompt: &str) -> Result<()> {
+    use crate::client::XiaomiMiMoClient;
+    use crate::models::{ContentBlock, Message, MessageRequest};
+
+    let client = XiaomiMiMoClient::new(config)?;
+
+    let request = MessageRequest {
+        model: model.to_string(),
+        messages: vec![Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::Text {
+                text: prompt.to_string(),
+                cache_control: None,
+            }],
+        }],
+        max_tokens: 4096,
+        system: None,
+        tools: None,
+        tool_choice: None,
+        metadata: None,
+        thinking: None,
+        reasoning_effort: None,
+        stream: Some(false),
+        temperature: None,
+        top_p: None,
+    };
+
+    let response = client.create_message(request).await?;
+
+    for block in response.content {
+        if let ContentBlock::Text { text, .. } = block {
+            println!("{text}");
+        }
+    }
+
+    Ok(())
+}
+
+async fn run_one_shot_json(config: &Config, model: &str, prompt: &str) -> Result<()> {
+    use crate::client::XiaomiMiMoClient;
+    use crate::models::{ContentBlock, Message, MessageRequest, SystemPrompt};
+
+    let client = XiaomiMiMoClient::new(config)?;
+    let request = MessageRequest {
+        model: model.to_string(),
+        messages: vec![Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::Text {
+                text: prompt.to_string(),
+                cache_control: None,
+            }],
+        }],
+        max_tokens: 4096,
+        system: Some(SystemPrompt::Text(
+            "You are a coding assistant. Give concise, actionable responses.".to_string(),
+        )),
+        tools: None,
+        tool_choice: None,
+        metadata: None,
+        thinking: None,
+        reasoning_effort: None,
+        stream: Some(false),
+        temperature: Some(0.2),
+        top_p: Some(0.9),
+    };
+
+    let response = client.create_message(request).await?;
+    let mut output = String::new();
+    for block in response.content {
+        if let ContentBlock::Text { text, .. } = block {
+            output.push_str(&text);
+        }
+    }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "mode": "one-shot",
+            "model": model,
+            "success": true,
+            "output": output
+        }))?
+    );
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_exec_agent(
+    config: &Config,
+    model: &str,
+    prompt: &str,
+    workspace: PathBuf,
+    max_subagents: usize,
+    auto_approve: bool,
+    trust_mode: bool,
+    json_output: bool,
+) -> Result<()> {
+    use crate::compaction::CompactionConfig;
+    use crate::core::engine::{EngineConfig, spawn_engine};
+    use crate::core::events::Event;
+    use crate::core::ops::Op;
+    use crate::models::{compaction_message_threshold_for_model, compaction_threshold_for_model};
+    use crate::tools::plan::new_shared_plan_state;
+    use crate::tools::todo::new_shared_todo_list;
+    use crate::tui::app::AppMode;
+
+    // Compaction defaults to disabled in v0.6.6: the checkpoint-restart cycle
+    // architecture (issue #124) handles long-context resets via fresh contexts
+    // rather than progressive summarization. The compaction config is still
+    // wired through so users who explicitly opt back in through TUI settings
+    // or direct engine config keep their old behavior.
+    let compaction = CompactionConfig {
+        enabled: false,
+        model: model.to_string(),
+        token_threshold: compaction_threshold_for_model(model),
+        message_threshold: compaction_message_threshold_for_model(model),
+        ..Default::default()
+    };
+
+    let network_policy = config.network.clone().map(|toml_cfg| {
+        crate::network_policy::NetworkPolicyDecider::with_default_audit(toml_cfg.into_runtime())
+    });
+
+    let lsp_config = config
+        .lsp
+        .clone()
+        .map(crate::config::LspConfigToml::into_runtime);
+
+    let engine_config = EngineConfig {
+        model: model.to_string(),
+        workspace: workspace.clone(),
+        allow_shell: auto_approve || config.allow_shell(),
+        trust_mode,
+        notes_path: config.notes_path(),
+        mcp_config_path: config.mcp_config_path(),
+        skills_dir: config.skills_dir(),
+        max_steps: 100,
+        max_subagents,
+        features: config.features(),
+        compaction,
+        cycle: crate::cycle_manager::CycleConfig::default(),
+        capacity: crate::core::capacity::CapacityControllerConfig::from_app_config(config),
+        todos: new_shared_todo_list(),
+        plan_state: new_shared_plan_state(),
+        max_spawn_depth: crate::tools::subagent::DEFAULT_MAX_SPAWN_DEPTH,
+        network_policy,
+        snapshots_enabled: config.snapshots_config().enabled,
+        lsp_config,
+        runtime_services: crate::tools::spec::RuntimeToolServices::default(),
+        subagent_model_overrides: config.subagent_model_overrides(),
+    };
+
+    let engine_handle = spawn_engine(engine_config, config);
+    let mode = if auto_approve {
+        AppMode::Yolo
+    } else {
+        AppMode::Agent
+    };
+
+    engine_handle
+        .send(Op::send(
+            prompt,
+            mode,
+            model,
+            None,
+            auto_approve || config.allow_shell(),
+            trust_mode,
+            auto_approve,
+        ))
+        .await?;
+
+    #[derive(serde::Serialize)]
+    struct ExecToolEntry {
+        name: String,
+        success: bool,
+        output: String,
+    }
+    #[derive(serde::Serialize, Default)]
+    struct ExecSummary {
+        mode: String,
+        model: String,
+        prompt: String,
+        output: String,
+        tools: Vec<ExecToolEntry>,
+        status: Option<String>,
+        error: Option<String>,
+    }
+    let mut summary = ExecSummary {
+        mode: "agent".to_string(),
+        model: model.to_string(),
+        prompt: prompt.to_string(),
+        ..ExecSummary::default()
+    };
+
+    let mut stdout = io::stdout();
+    let mut ends_with_newline = false;
+    loop {
+        let event = {
+            let mut rx = engine_handle.rx_event.write().await;
+            rx.recv().await
+        };
+
+        let Some(event) = event else {
+            break;
+        };
+
+        match event {
+            Event::MessageDelta { content, .. } => {
+                summary.output.push_str(&content);
+                if !json_output {
+                    print!("{content}");
+                    stdout.flush()?;
+                }
+                ends_with_newline = content.ends_with('\n');
+            }
+            Event::MessageComplete { .. } if !json_output && !ends_with_newline => {
+                println!();
+            }
+            Event::ToolCallStarted { name, input, .. } if !json_output => {
+                let summary = summarize_tool_args(&input);
+                if let Some(summary) = summary {
+                    eprintln!("tool: {name} ({summary})");
+                } else {
+                    eprintln!("tool: {name}");
+                }
+            }
+            Event::ToolCallProgress { id, output } if !json_output => {
+                eprintln!("tool {id}: {}", summarize_tool_output(&output));
+            }
+            Event::ToolCallComplete { name, result, .. } => match result {
+                Ok(output) => {
+                    summary.tools.push(ExecToolEntry {
+                        name: name.clone(),
+                        success: output.success,
+                        output: output.content.clone(),
+                    });
+                    if name == "exec_shell" && !output.content.trim().is_empty() {
+                        if !json_output {
+                            eprintln!("tool {name} completed");
+                            eprintln!(
+                                "--- stdout/stderr ---\n{}\n---------------------",
+                                output.content
+                            );
+                        }
+                    } else if !json_output {
+                        eprintln!(
+                            "tool {name} completed: {}",
+                            summarize_tool_output(&output.content)
+                        );
+                    }
+                }
+                Err(err) => {
+                    summary.tools.push(ExecToolEntry {
+                        name: name.clone(),
+                        success: false,
+                        output: err.to_string(),
+                    });
+                    if !json_output {
+                        eprintln!("tool {name} failed: {err}");
+                    }
+                }
+            },
+            Event::AgentSpawned { id, prompt } => {
+                eprintln!("sub-agent {id} spawned: {}", summarize_tool_output(&prompt));
+            }
+            Event::AgentProgress { id, status } => {
+                eprintln!("sub-agent {id}: {status}");
+            }
+            Event::AgentComplete { id, result } => {
+                eprintln!(
+                    "sub-agent {id} completed: {}",
+                    summarize_tool_output(&result)
+                );
+            }
+            Event::ApprovalRequired { id, .. } => {
+                if auto_approve {
+                    let _ = engine_handle.approve_tool_call(id).await;
+                } else {
+                    let _ = engine_handle.deny_tool_call(id).await;
+                }
+            }
+            Event::ElevationRequired {
+                tool_id,
+                tool_name,
+                denial_reason,
+                ..
+            } => {
+                if auto_approve {
+                    eprintln!("sandbox denied {tool_name}: {denial_reason} (auto-elevating)");
+                    let policy = crate::sandbox::SandboxPolicy::DangerFullAccess;
+                    let _ = engine_handle.retry_tool_with_policy(tool_id, policy).await;
+                } else {
+                    eprintln!("sandbox denied {tool_name}: {denial_reason}");
+                    let _ = engine_handle.deny_tool_call(tool_id).await;
+                }
+            }
+            Event::Error {
+                envelope,
+                recoverable: _,
+            } => {
+                summary.error = Some(envelope.message.clone());
+                if !json_output {
+                    eprintln!("error: {}", envelope.message);
+                }
+            }
+            Event::TurnComplete { status, error, .. } => {
+                summary.status = Some(format!("{status:?}").to_lowercase());
+                summary.error = error;
+                let _ = engine_handle.send(Op::Shutdown).await;
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod terminal_mode_tests {
+    use super::*;
+    use clap::Parser;
+
+    fn parse_cli(args: &[&str]) -> Cli {
+        Cli::try_parse_from(args).expect("CLI args should parse")
+    }
+
+    #[test]
+    fn mouse_capture_defaults_on_when_alternate_screen_is_active() {
+        let cli = parse_cli(&["xiaomimimo"]);
+        let config = Config::default();
+
+        assert!(should_use_mouse_capture(&cli, &config, true));
+    }
+
+    #[test]
+    fn no_mouse_capture_flag_disables_mouse_capture() {
+        let cli = parse_cli(&["xiaomimimo", "--no-mouse-capture"]);
+        let config = Config::default();
+
+        assert!(!should_use_mouse_capture(&cli, &config, true));
+    }
+
+    #[test]
+    fn config_can_disable_default_mouse_capture() {
+        let cli = parse_cli(&["xiaomimimo"]);
+        let config = Config {
+            tui: Some(crate::config::TuiConfig {
+                alternate_screen: None,
+                mouse_capture: Some(false),
+                status_items: None,
+            }),
+            ..Config::default()
+        };
+
+        assert!(!should_use_mouse_capture(&cli, &config, true));
+    }
+
+    #[test]
+    fn mouse_capture_is_off_without_alternate_screen() {
+        let cli = parse_cli(&["xiaomimimo", "--mouse-capture"]);
+        let config = Config::default();
+
+        assert!(!should_use_mouse_capture(&cli, &config, false));
+    }
+}
+
+#[cfg(test)]
+mod doctor_mcp_tests {
+    use super::*;
+
+    fn make_server(command: Option<&str>, args: &[&str], url: Option<&str>) -> McpServerConfig {
+        McpServerConfig {
+            command: command.map(String::from),
+            args: args.iter().map(|s| s.to_string()).collect(),
+            env: std::collections::HashMap::new(),
+            url: url.map(String::from),
+            connect_timeout: None,
+            execute_timeout: None,
+            read_timeout: None,
+            disabled: false,
+            enabled: true,
+            required: false,
+            enabled_tools: Vec::new(),
+            disabled_tools: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_no_command_or_url_is_error() {
+        let server = make_server(None, &[], None);
+        assert!(matches!(
+            doctor_check_mcp_server(&server),
+            McpServerDoctorStatus::Error(_)
+        ));
+    }
+
+    #[test]
+    fn test_url_server_is_ok() {
+        let server = make_server(None, &[], Some("http://localhost:3000/mcp"));
+        match doctor_check_mcp_server(&server) {
+            McpServerDoctorStatus::Ok(detail) => assert!(detail.contains("HTTP/SSE")),
+            other => panic!("Expected Ok, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_command_server_is_ok() {
+        let server = make_server(Some("node"), &["server.js"], None);
+        match doctor_check_mcp_server(&server) {
+            McpServerDoctorStatus::Ok(detail) => assert!(detail.contains("stdio")),
+            other => panic!("Expected Ok, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_self_hosted_absolute_is_ok() {
+        let server = make_server(Some("/usr/local/bin/xiaomimimo"), &["serve", "--mcp"], None);
+        match doctor_check_mcp_server(&server) {
+            McpServerDoctorStatus::Ok(detail) | McpServerDoctorStatus::Error(detail) => {
+                // On systems where the path doesn't exist, this will be Error.
+                // On systems where it does, it'll be Ok. Either is valid for the test.
+                assert!(
+                    detail.contains("self-hosted") || detail.contains("not found"),
+                    "unexpected detail: {detail}"
+                );
+            }
+            McpServerDoctorStatus::Warning(detail) => {
+                panic!("Absolute path should not warn: {detail}")
+            }
+        }
+    }
+
+    #[test]
+    fn test_self_hosted_relative_is_warning() {
+        let server = make_server(Some("xiaomimimo"), &["serve", "--mcp"], None);
+        match doctor_check_mcp_server(&server) {
+            McpServerDoctorStatus::Warning(detail) => {
+                assert!(detail.contains("relative"));
+            }
+            other => panic!("Expected Warning for relative path, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_empty_command_is_error() {
+        let server = make_server(Some(""), &[], None);
+        assert!(matches!(
+            doctor_check_mcp_server(&server),
+            McpServerDoctorStatus::Error(_)
+        ));
+    }
+}
+
+#[cfg(test)]
+mod setup_helper_tests {
+    use super::*;
+    use std::collections::BTreeSet;
+    use tempfile::TempDir;
+
+    #[test]
+    fn init_tools_dir_creates_readme_and_example() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("tools");
+        let (returned_dir, readme_status, example_status) =
+            init_tools_dir(&dir, false).expect("init_tools_dir should succeed");
+
+        assert_eq!(returned_dir, dir);
+        assert!(matches!(readme_status, WriteStatus::Created));
+        assert!(matches!(example_status, WriteStatus::Created));
+        assert!(dir.join("README.md").exists());
+        assert!(dir.join("example.sh").exists());
+
+        let readme = std::fs::read_to_string(dir.join("README.md")).unwrap();
+        assert!(
+            readme.contains("# name:"),
+            "README must show frontmatter convention"
+        );
+
+        let example = std::fs::read_to_string(dir.join("example.sh")).unwrap();
+        assert!(example.starts_with("#!/usr/bin/env sh"));
+        assert!(example.contains("# name: example"));
+        assert!(example.contains("# description:"));
+    }
+
+    #[test]
+    fn init_tools_dir_skips_existing_without_force() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("tools");
+        let _ = init_tools_dir(&dir, false).unwrap();
+        let (_, readme_status, example_status) = init_tools_dir(&dir, false).unwrap();
+        assert!(matches!(readme_status, WriteStatus::SkippedExists));
+        assert!(matches!(example_status, WriteStatus::SkippedExists));
+    }
+
+    #[test]
+    fn init_tools_dir_force_overwrites() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("tools");
+        let _ = init_tools_dir(&dir, false).unwrap();
+        std::fs::write(dir.join("example.sh"), "stale").unwrap();
+        let (_, _, example_status) = init_tools_dir(&dir, true).unwrap();
+        assert!(matches!(example_status, WriteStatus::Overwritten));
+        let example = std::fs::read_to_string(dir.join("example.sh")).unwrap();
+        assert_ne!(example, "stale");
+    }
+
+    #[test]
+    fn init_plugins_dir_creates_readme_and_example_layout() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("plugins");
+        let (readme_path, example_path, readme_status, example_status) =
+            init_plugins_dir(&dir, false).unwrap();
+
+        assert_eq!(readme_path, dir.join("README.md"));
+        assert_eq!(example_path, dir.join("example").join("PLUGIN.md"));
+        assert!(matches!(readme_status, WriteStatus::Created));
+        assert!(matches!(example_status, WriteStatus::Created));
+        assert!(readme_path.exists());
+        assert!(example_path.exists());
+
+        let plugin_md = std::fs::read_to_string(&example_path).unwrap();
+        assert!(plugin_md.contains("---"));
+        assert!(plugin_md.contains("name: example"));
+    }
+
+    #[test]
+    fn collect_clean_targets_finds_only_known_files() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path();
+        std::fs::write(dir.join("latest.json"), "{}").unwrap();
+        std::fs::write(dir.join("offline_queue.json"), "[]").unwrap();
+        std::fs::write(dir.join("unrelated.json"), "{}").unwrap();
+
+        let plan = collect_clean_targets(dir);
+        assert_eq!(plan.targets.len(), 2);
+        assert!(plan.targets.iter().any(|p| p.ends_with("latest.json")));
+        assert!(
+            plan.targets
+                .iter()
+                .any(|p| p.ends_with("offline_queue.json"))
+        );
+        assert!(!plan.targets.iter().any(|p| p.ends_with("unrelated.json")));
+    }
+
+    #[test]
+    fn execute_clean_plan_removes_files_and_returns_them() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path();
+        let latest = dir.join("latest.json");
+        let queue = dir.join("offline_queue.json");
+        std::fs::write(&latest, "{}").unwrap();
+        std::fs::write(&queue, "[]").unwrap();
+
+        let plan = collect_clean_targets(dir);
+        let removed = execute_clean_plan(&plan).unwrap();
+        assert_eq!(removed.len(), 2);
+        assert!(!latest.exists());
+        assert!(!queue.exists());
+    }
+
+    #[test]
+    fn run_setup_clean_dry_run_lists_targets_without_force() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path();
+        std::fs::write(dir.join("latest.json"), "{}").unwrap();
+        run_setup_clean(dir, false).unwrap();
+        // Without --force, files must remain on disk.
+        assert!(dir.join("latest.json").exists());
+    }
+
+    #[test]
+    fn run_setup_clean_force_removes_files() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path();
+        std::fs::write(dir.join("latest.json"), "{}").unwrap();
+        std::fs::write(dir.join("offline_queue.json"), "[]").unwrap();
+        run_setup_clean(dir, true).unwrap();
+        assert!(!dir.join("latest.json").exists());
+        assert!(!dir.join("offline_queue.json").exists());
+    }
+
+    #[test]
+    fn run_setup_clean_handles_missing_dir() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("does-not-exist");
+        // Should print and return Ok without error.
+        run_setup_clean(&dir, true).unwrap();
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn dotenv_status_points_to_example_when_present() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join(".env.example"), "XIAOMIMIMO_API_KEY=\n").unwrap();
+
+        assert_eq!(
+            dotenv_status_line(tmp.path()),
+            ".env not present in workspace (run `cp .env.example .env` and edit)"
+        );
+
+        std::fs::write(tmp.path().join(".env"), "XIAOMIMIMO_API_KEY=test\n").unwrap();
+        assert!(dotenv_status_line(tmp.path()).contains(".env present at"));
+    }
+
+    #[test]
+    fn env_example_is_trackable_and_every_key_is_wired() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let env_example = std::fs::read_to_string(root.join(".env.example")).unwrap();
+        let gitignore = std::fs::read_to_string(root.join(".gitignore")).unwrap();
+
+        assert!(gitignore.contains("!.env.example"));
+
+        let keys = documented_env_keys(&env_example);
+        for required in [
+            "XIAOMIMIMO_API_KEY",
+            "XIAOMIMIMO_BASE_URL",
+            "XIAOMIMIMO_MODEL",
+            "NVIDIA_API_KEY",
+            "NIM_BASE_URL",
+            "RUST_LOG",
+            "XIAOMIMIMO_APPROVAL_POLICY",
+            "XIAOMIMIMO_SANDBOX_MODE",
+        ] {
+            assert!(
+                keys.contains(required),
+                ".env.example is missing {required}"
+            );
+        }
+
+        let sources = [
+            include_str!("config.rs"),
+            include_str!("logging.rs"),
+            include_str!("../../config/src/lib.rs"),
+            include_str!("../../cli/src/main.rs"),
+        ]
+        .join("\n");
+
+        for key in keys {
+            assert!(
+                sources.contains(&key),
+                ".env.example documents {key}, but no source file references it"
+            );
+        }
+    }
+
+    fn documented_env_keys(content: &str) -> BTreeSet<String> {
+        content
+            .lines()
+            .filter_map(|line| {
+                let trimmed = line.trim();
+                let uncommented = trimmed
+                    .strip_prefix('#')
+                    .map(str::trim_start)
+                    .unwrap_or(trimmed);
+                let (key, _) = uncommented.split_once('=')?;
+                let key = key.trim();
+                let is_env_key = key
+                    .chars()
+                    .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
+                    && key.chars().any(|ch| ch == '_');
+                is_env_key.then(|| key.to_string())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn resolve_api_key_source_reports_env_when_set() {
+        // Snapshot env so we can restore it.
+        let prev = std::env::var("XIAOMIMIMO_API_KEY").ok();
+        // SAFETY: tests in this binary may run in parallel; use a marker that
+        // is unmistakably a test value so concurrent reads can detect it.
+        // To avoid clobbering CI keys we save/restore around the assertion.
+        unsafe {
+            std::env::set_var("XIAOMIMIMO_API_KEY", "test-helper-value");
+        }
+        let cfg = Config::default();
+        let source = resolve_api_key_source(&cfg);
+        match prev {
+            Some(value) => unsafe { std::env::set_var("XIAOMIMIMO_API_KEY", value) },
+            None => unsafe { std::env::remove_var("XIAOMIMIMO_API_KEY") },
+        }
+        assert_eq!(source, ApiKeySource::Env);
+    }
+
+    #[test]
+    fn skills_count_for_returns_zero_for_missing_dir() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("nope");
+        assert_eq!(skills_count_for(&dir), 0);
+    }
+
+    #[test]
+    fn skills_count_for_counts_valid_skill_dirs() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("skills");
+        let skill_dir = dir.join("getting-started");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: getting-started\ndescription: hi\n---\nbody",
+        )
+        .unwrap();
+        assert_eq!(skills_count_for(&dir), 1);
+    }
+}
