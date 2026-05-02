@@ -3040,6 +3040,7 @@ async fn run_interactive(
     config: &Config,
     resume_session_id: Option<String>,
 ) -> Result<()> {
+    let workspace_explicit = cli.workspace.is_some();
     let workspace = cli
         .workspace
         .clone()
@@ -3075,6 +3076,7 @@ async fn run_interactive(
         tui::TuiOptions {
             model,
             workspace,
+            workspace_explicit,
             allow_shell: cli.yolo || config.allow_shell(),
             use_alt_screen,
             use_mouse_capture,
