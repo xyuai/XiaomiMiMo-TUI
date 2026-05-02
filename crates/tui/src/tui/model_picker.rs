@@ -38,6 +38,10 @@ const PICKER_MODELS: &[(&str, &str)] = &[
     ("mimo-v2-pro", "pro legacy"),
     ("mimo-v2-omni", "omni 256K"),
     ("mimo-v2-flash", "fast / cheap"),
+    ("mimo-v2.5-tts", "speech / TTS"),
+    ("mimo-v2.5-tts-voicedesign", "voice design"),
+    ("mimo-v2.5-tts-voiceclone", "voice clone"),
+    ("mimo-v2-tts", "legacy speech"),
 ];
 
 /// Thinking-effort rows shown in the picker, in the order XiaomiMiMo
@@ -385,6 +389,21 @@ mod tests {
         let view = ModelPickerView::new(&app);
         assert_eq!(view.resolved_model(), "mimo-v2-flash");
         assert_eq!(view.resolved_effort(), ReasoningEffort::Max);
+    }
+
+    #[test]
+    fn picker_lists_supported_tts_models() {
+        for model in [
+            "mimo-v2.5-tts",
+            "mimo-v2.5-tts-voicedesign",
+            "mimo-v2.5-tts-voiceclone",
+            "mimo-v2-tts",
+        ] {
+            assert!(
+                PICKER_MODELS.iter().any(|(id, _)| *id == model),
+                "missing {model}"
+            );
+        }
     }
 
     #[test]

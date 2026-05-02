@@ -24,6 +24,7 @@ pub mod search;
 pub mod shell;
 mod shell_output;
 pub mod spec;
+pub mod speech;
 pub mod subagent;
 pub mod swarm;
 pub mod tasks;

@@ -343,6 +343,14 @@ impl ToolRegistryBuilder {
         self.with_tool(Arc::new(ValidateDataTool))
     }
 
+    /// Include first-class XiaomiMiMo speech/TTS tools.
+    #[must_use]
+    pub fn with_speech_tools(self) -> Self {
+        use super::speech::SpeechTool;
+        self.with_tool(Arc::new(SpeechTool::new("speech")))
+            .with_tool(Arc::new(SpeechTool::new("tts")))
+    }
+
     /// Include durable task, gate, PR-attempt, GitHub, and automation tools.
     #[must_use]
     pub fn with_runtime_task_tools(self) -> Self {
@@ -511,6 +519,7 @@ impl ToolRegistryBuilder {
             .with_project_tools()
             .with_test_runner_tool()
             .with_validation_tools()
+            .with_speech_tools()
             .with_runtime_task_tools()
             .with_revert_turn_tool();
 
@@ -945,5 +954,18 @@ mod tests {
             .build(ctx);
 
         assert!(registry.contains("finance"));
+    }
+
+    #[test]
+    fn test_builder_with_agent_tools_includes_speech_and_tts() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+
+        let registry = ToolRegistryBuilder::new()
+            .with_agent_tools(false)
+            .build(ctx);
+
+        assert!(registry.contains("speech"));
+        assert!(registry.contains("tts"));
     }
 }

@@ -350,6 +350,7 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
 fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
     EngineConfig {
         model: app.model.clone(),
+        api_base_url: config.xiaomimimo_base_url(),
         workspace: app.workspace.clone(),
         allow_shell: app.allow_shell,
         trust_mode: app.trust_mode,

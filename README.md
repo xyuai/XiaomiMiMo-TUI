@@ -11,7 +11,7 @@ XiaomiMiMo-TUI 是一个为 Xiaomi MiMo 适配的终端 TUI 客户端。
 - **MiMo 对话 TUI**：在终端中使用 Xiaomi MiMo 进行多轮对话。
 - **OpenAI 兼容接口**：默认使用 Xiaomi MiMo Token Plan 套餐专属 OpenAI-compatible API 与 Base URL，也可通过配置覆盖。
 - **模型配置**：默认模型为 `mimo-v2.5-pro`，可通过配置文件、环境变量或命令行切换。
-- **语音合成**：新增 `speech`/`tts` 命令，支持 MiMo-V2.5-TTS 内置音色、声音设计和声音克隆。
+- **语音合成**：新增 `speech`/`tts` 命令，并在 TUI 内提供模型可直接调用的 `speech`/`tts` 工具；支持 MiMo-V2.5-TTS 内置音色、声音设计和声音克隆。
 - **会话管理**：支持会话保存、恢复和历史记录。
 - **启动引导**：首次启动会引导创建或选择工作区文件夹，避免误把 Downloads 等大目录作为默认工作区。
 - **工具工作流**：保留原 TUI 架构中的工具调用、文件/命令辅助等能力。
@@ -40,7 +40,7 @@ $env:XIAOMIMIMO_API_KEY="your-api-key"
 
 ### 语音合成
 
-语音功能使用 MiMo-V2.5-TTS 系列模型，通过 OpenAI 兼容的 Chat Completions 接口生成音频文件：
+语音功能使用 MiMo-V2.5-TTS / MiMo-V2-TTS 系列模型，通过 Token Plan 套餐专属 OpenAI-compatible Chat Completions 接口生成音频文件。TUI 对话中模型也可以直接调用 `speech`/`tts` 工具，不需要先让用户手动执行 CLI 命令：
 
 ```powershell
 # 内置音色
@@ -56,7 +56,9 @@ $env:XIAOMIMIMO_API_KEY="your-api-key"
 .\xiaomimimo.exe speech "这是一段克隆音色测试。" --clone-voice .\voice.wav -o clone.wav
 ```
 
-常用内置音色：`mimo_default`、`冰糖`、`茉莉`、`苏打`、`白桦`、`Mia`、`Chloe`、`Milo`、`Dean`。
+常用内置音色：`mimo_default`、`冰糖`、`茉莉`、`苏打`、`白桦`、`Mia`、`Chloe`、`Milo`、`Dean`。TUI 直连工具支持 `wav`、`mp3`、`pcm16` 输出；朗读文本按官方要求作为 assistant 消息发送，`instruction` 可用于自然语言风格控制，文本内可直接放置官方音频/风格标签。低延迟 `stream=true` 暂未作为 TUI 直连工具暴露，当前默认生成完整音频文件。
+
+已支持套餐模型：`mimo-v2.5-pro`、`mimo-v2.5`、`mimo-v2.5-tts-voiceclone`、`mimo-v2.5-tts-voicedesign`、`mimo-v2.5-tts`、`mimo-v2-pro`、`mimo-v2-omni`、`mimo-v2-tts`。
 
 ### 从源码运行
 

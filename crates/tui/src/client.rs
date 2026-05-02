@@ -124,7 +124,8 @@ pub struct AvailableModel {
 
 /// Request payload for MiMo speech synthesis models.
 ///
-/// MiMo-V2.5-TTS uses the OpenAI-compatible `/v1/chat/completions` endpoint:
+/// MiMo-V2.5-TTS / MiMo-V2-TTS use the OpenAI-compatible
+/// `/v1/chat/completions` endpoint:
 /// the optional style/voice instruction is sent as a `user` message, while the
 /// text to synthesize must be sent as an `assistant` message.
 #[derive(Debug, Clone)]
@@ -570,7 +571,9 @@ impl XiaomiMiMoClient {
     /// The target text is deliberately placed in an `assistant` message because
     /// that is what Xiaomi MiMo's TTS endpoint expects. The optional
     /// `instruction` becomes a `user` message and controls voice style, voice
-    /// design, or voice-clone performance; it is not spoken verbatim.
+    /// design, or voice-clone performance; it is not spoken verbatim. This
+    /// helper performs non-streaming file-oriented synthesis; model-visible
+    /// tools should reject `stream=true` until a streaming path is added.
     pub async fn synthesize_speech(
         &self,
         request: SpeechSynthesisRequest,

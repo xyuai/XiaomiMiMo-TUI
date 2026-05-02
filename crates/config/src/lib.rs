@@ -622,6 +622,10 @@ fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
         "mimo-flash" | "mimo-v2-flash" | "mimo-chat" | "xiaomimimo-chat" | "xiaomimimo-reasoner"
         | "xiaomimimo-r1" | "xiaomimimo-v3" | "xiaomimimo-v3.2"
         | "xiaomimimo-v4-flash" | "xiaomimimo-v4flash" => Some("mimo-v2-flash"),
+        "mimo-v2-tts" => Some("mimo-v2-tts"),
+        "mimo-tts" | "mimo-v25-tts" | "mimo-v2.5-tts" => Some("mimo-v2.5-tts"),
+        "mimo-tts-voicedesign" | "mimo-voice-design" | "mimo-v25-tts-voicedesign" | "mimo-v2.5-tts-voicedesign" => Some("mimo-v2.5-tts-voicedesign"),
+        "mimo-tts-voiceclone" | "mimo-voice-clone" | "mimo-v25-tts-voiceclone" | "mimo-v2.5-tts-voiceclone" => Some("mimo-v2.5-tts-voiceclone"),
         _ => None,
     };
 
@@ -1031,6 +1035,26 @@ mod tests {
 
         assert_eq!(resolved.provider, ProviderKind::NvidiaNim);
         assert_eq!(resolved.model, DEFAULT_NVIDIA_NIM_FLASH_MODEL);
+    }
+
+    #[test]
+    fn xiaomimimo_provider_normalizes_tts_aliases() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_xiaomimimo_runtime_overrides();
+        let mut config = ConfigToml::default();
+        config.providers.xiaomimimo.model = Some("mimo-tts-voiceclone".to_string());
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::XiaomiMiMo);
+        assert_eq!(resolved.model, "mimo-v2.5-tts-voiceclone");
+
+        let cli = CliRuntimeOverrides {
+            model: Some("mimo-v2-tts".to_string()),
+            ..CliRuntimeOverrides::default()
+        };
+        let resolved = ConfigToml::default().resolve_runtime_options(&cli);
+        assert_eq!(resolved.model, "mimo-v2-tts");
     }
 
     #[test]

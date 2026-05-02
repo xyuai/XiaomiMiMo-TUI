@@ -37,7 +37,7 @@ pub fn provider(app: &mut App, args: Option<&str>) -> CommandResult {
             Some(normalized) => Some(normalized),
             None => {
                 return CommandResult::error(format!(
-                    "Invalid model '{raw}'. Try: flash, pro, mimo-v2-flash, mimo-v2.5-pro."
+                    "Invalid model '{raw}'. Try: flash, pro, tts, voiceclone, mimo-v2.5-pro, mimo-v2.5-tts."
                 ));
             }
         },
@@ -57,6 +57,9 @@ fn expand_model_alias(name: &str) -> String {
     match name.trim().to_ascii_lowercase().as_str() {
         "pro" | "v4-pro" => "mimo-v2.5-pro".to_string(),
         "flash" | "v4-flash" => "mimo-v2-flash".to_string(),
+        "tts" | "speech" => "mimo-v2.5-tts".to_string(),
+        "voicedesign" | "voice-design" => "mimo-v2.5-tts-voicedesign".to_string(),
+        "voiceclone" | "voice-clone" => "mimo-v2.5-tts-voiceclone".to_string(),
         other => other.to_string(),
     }
 }
@@ -206,6 +209,28 @@ mod tests {
             Some(AppAction::SwitchProvider { provider, model }) => {
                 assert_eq!(provider, ApiProvider::NvidiaNim);
                 assert_eq!(model.as_deref(), Some("mimo-v2.5-pro"));
+            }
+            other => panic!("expected SwitchProvider action, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn provider_accepts_tts_shorthands() {
+        let mut app = create_test_app();
+        let result = provider(&mut app, Some("xiaomimimo tts"));
+        match result.action {
+            Some(AppAction::SwitchProvider { provider, model }) => {
+                assert_eq!(provider, ApiProvider::XiaomiMiMo);
+                assert_eq!(model.as_deref(), Some("mimo-v2.5-tts"));
+            }
+            other => panic!("expected SwitchProvider action, got {other:?}"),
+        }
+
+        let result = provider(&mut app, Some("xiaomimimo voiceclone"));
+        match result.action {
+            Some(AppAction::SwitchProvider { provider, model }) => {
+                assert_eq!(provider, ApiProvider::XiaomiMiMo);
+                assert_eq!(model.as_deref(), Some("mimo-v2.5-tts-voiceclone"));
             }
             other => panic!("expected SwitchProvider action, got {other:?}"),
         }

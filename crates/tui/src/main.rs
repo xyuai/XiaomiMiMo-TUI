@@ -1998,12 +1998,6 @@ async fn run_speech(config: &Config, args: SpeechArgs) -> Result<()> {
     if clone_voice.is_some() && voice.is_some() {
         bail!("Use either --clone-voice or --voice for cloned voice data, not both");
     }
-    if voice_is_data_uri && instruction.is_none() {
-        bail!(
-            "Using --voice <data-uri> for voice clone also requires --instruction for the user message. Use --clone-voice <mp3|wav> for file samples."
-        );
-    }
-
     let model = match model {
         Some(value) => crate::config::normalize_model_name(&value).unwrap_or(value),
         None => {
@@ -2038,6 +2032,9 @@ async fn run_speech(config: &Config, args: SpeechArgs) -> Result<()> {
     } else {
         Some("mimo_default".to_string())
     };
+    let format = normalize_speech_format(&format).with_context(|| {
+        format!("Unsupported speech format '{format}' (allowed: wav, mp3, pcm16)")
+    })?;
 
     let client = XiaomiMiMoClient::new(config)?;
     let response = client
@@ -2109,6 +2106,28 @@ fn combine_speech_instructions(
 }
 
 const VOICE_CLONE_BASE64_MAX_BYTES: usize = 10 * 1024 * 1024;
+
+fn normalize_speech_format(format: &str) -> Option<String> {
+    let normalized = format.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "wav" | "mp3" | "pcm16" => Some(normalized),
+        "pcm" => Some("pcm16".to_string()),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod speech_cli_tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_documented_speech_formats() {
+        assert_eq!(normalize_speech_format("WAV").as_deref(), Some("wav"));
+        assert_eq!(normalize_speech_format("pcm16").as_deref(), Some("pcm16"));
+        assert_eq!(normalize_speech_format("pcm").as_deref(), Some("pcm16"));
+        assert_eq!(normalize_speech_format("flac"), None);
+    }
+}
 
 fn encode_voice_clone_data_uri(path: &Path) -> Result<String> {
     let bytes = std::fs::read(path)
@@ -3225,6 +3244,7 @@ async fn run_exec_agent(
 
     let engine_config = EngineConfig {
         model: model.to_string(),
+        api_base_url: config.xiaomimimo_base_url(),
         workspace: workspace.clone(),
         allow_shell: auto_approve || config.allow_shell(),
         trust_mode,

@@ -260,7 +260,7 @@ impl Settings {
 
                 let Some(model) = normalize_model_name(trimmed) else {
                     anyhow::bail!(
-                        "Failed to update setting: invalid model '{value}'. Expected: a XiaomiMiMo model ID (for example mimo-v2.5-pro, mimo-v2-flash), or none/default."
+                        "Failed to update setting: invalid model '{value}'. Expected: a XiaomiMiMo model ID (for example mimo-v2.5-pro, mimo-v2.5-tts, mimo-v2-tts), or none/default."
                     );
                 };
                 self.default_model = Some(model);

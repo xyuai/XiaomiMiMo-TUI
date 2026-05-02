@@ -73,6 +73,9 @@ use super::turn::{TurnContext, TurnToolCall, post_turn_snapshot, pre_turn_snapsh
 pub struct EngineConfig {
     /// Model identifier to use for responses.
     pub model: String,
+    /// Non-secret effective API base URL for model-visible tools that call
+    /// XiaomiMiMo-compatible endpoints directly.
+    pub api_base_url: String,
     /// Workspace root for tool execution and file operations.
     pub workspace: PathBuf,
     /// Allow shell tool execution when true.
@@ -131,6 +134,7 @@ impl Default for EngineConfig {
     fn default() -> Self {
         Self {
             model: DEFAULT_TEXT_MODEL.to_string(),
+            api_base_url: "https://token-plan-cn.xiaomimimo.com/v1".to_string(),
             workspace: PathBuf::from("."),
             allow_shell: true,
             trust_mode: false,
@@ -521,6 +525,8 @@ fn should_default_defer_tool(name: &str, mode: AppMode) -> bool {
             | "task_shell_wait"
             | "github_issue_context"
             | "github_pr_context"
+            | "speech"
+            | "tts"
             | REQUEST_USER_INPUT_NAME
     )
 }
@@ -1246,7 +1252,12 @@ impl Engine {
     }
 
     /// Create a new engine with the given configuration
-    pub fn new(config: EngineConfig, api_config: &Config) -> (Self, EngineHandle) {
+    pub fn new(mut config: EngineConfig, api_config: &Config) -> (Self, EngineHandle) {
+        // Keep non-secret endpoint metadata in sync with the same config used
+        // to create the HTTP client. Model-visible tools such as `speech`
+        // need this to call and report the effective dedicated Base URL.
+        config.api_base_url = api_config.xiaomimimo_base_url();
+
         let (tx_op, rx_op) = mpsc::channel(32);
         let (tx_event, rx_event) = mpsc::channel(256);
         let (tx_approval, rx_approval) = mpsc::channel(64);
@@ -2254,6 +2265,10 @@ impl Engine {
         .with_shell_manager(self.shell_manager.clone())
         .with_runtime_services(self.config.runtime_services.clone())
         .with_cancel_token(self.cancel_token.clone())
+        .with_xiaomimimo_client(
+            self.xiaomimimo_client.clone(),
+            self.config.api_base_url.clone(),
+        )
         .with_trusted_external_paths(trusted.paths().to_vec());
 
         if let Some(decider) = self.config.network_policy.as_ref() {

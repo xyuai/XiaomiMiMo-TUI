@@ -37,6 +37,7 @@ pub const COMMON_XIAOMIMIMO_MODELS: &[&str] = &[
     "mimo-v2-pro",
     "mimo-v2-omni",
     "mimo-v2-flash",
+    "mimo-v2-tts",
     "mimo-v2.5-tts",
     "mimo-v2.5-tts-voicedesign",
     "mimo-v2.5-tts-voiceclone",
@@ -295,6 +296,7 @@ pub fn canonical_model_name(model: &str) -> Option<&'static str> {
         "mimo-v2-pro" => Some("mimo-v2-pro"),
         "mimo-omni" | "mimo-v2-omni" => Some("mimo-v2-omni"),
         "mimo-flash" | "mimo-v2-flash" | "mimo-chat" | "xiaomimimo-chat" | "xiaomimimo-reasoner" | "xiaomimimo-r1" | "xiaomimimo-v3" | "xiaomimimo-v3.2" | "xiaomimimo-v4-flash" | "xiaomimimo-v4flash" => Some("mimo-v2-flash"),
+        "mimo-v2-tts" => Some("mimo-v2-tts"),
         "mimo-tts" | "mimo-v25-tts" | "mimo-v2.5-tts" => Some("mimo-v2.5-tts"),
         "mimo-tts-voicedesign" | "mimo-voice-design" | "mimo-v25-tts-voicedesign" | "mimo-v2.5-tts-voicedesign" => Some("mimo-v2.5-tts-voicedesign"),
         "mimo-tts-voiceclone" | "mimo-voice-clone" | "mimo-v25-tts-voiceclone" | "mimo-v2.5-tts-voiceclone" => Some("mimo-v2.5-tts-voiceclone"),
@@ -2705,6 +2707,15 @@ mod tests {
             normalize_model_name("mimo-v2-flash").as_deref(),
             Some("mimo-v2-flash")
         );
+        assert_eq!(
+            normalize_model_name("mimo-v2-tts").as_deref(),
+            Some("mimo-v2-tts")
+        );
+        assert_eq!(
+            normalize_model_name("mimo-v2.5-tts-voiceclone").as_deref(),
+            Some("mimo-v2.5-tts-voiceclone")
+        );
+        assert!(COMMON_XIAOMIMIMO_MODELS.contains(&"mimo-v2-tts"));
     }
 
     #[test]

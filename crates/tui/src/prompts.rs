@@ -360,6 +360,30 @@ mod tests {
     }
 
     #[test]
+    fn base_prompt_advertises_token_plan_speech_entitlements() {
+        let prompt = compose_prompt(AppMode::Agent, Personality::Calm);
+        for expected in [
+            "https://token-plan-cn.xiaomimimo.com/v1",
+            "mimo-v2.5-pro",
+            "mimo-v2.5",
+            "mimo-v2.5-tts-voiceclone",
+            "mimo-v2.5-tts-voicedesign",
+            "mimo-v2.5-tts",
+            "mimo-v2-pro",
+            "mimo-v2-omni",
+            "mimo-v2-tts",
+            "`speech`",
+            "`tts`",
+            "pcm16",
+            "assistant message",
+            "stream=true",
+            "Do **not** say you lack speech/audio generation capability",
+        ] {
+            assert!(prompt.contains(expected), "missing {expected}");
+        }
+    }
+
+    #[test]
     fn personality_switches_correctly() {
         let calm = compose_prompt(AppMode::Agent, Personality::Calm);
         let playful = compose_prompt(AppMode::Agent, Personality::Playful);

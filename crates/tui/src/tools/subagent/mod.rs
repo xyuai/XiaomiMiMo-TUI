@@ -3335,7 +3335,7 @@ pub(crate) fn normalize_requested_subagent_model(
     }
     crate::config::normalize_model_name(trimmed).ok_or_else(|| {
         ToolError::invalid_input(format!(
-            "Invalid {field} '{trimmed}'. Expected a XiaomiMiMo model id such as mimo-v2.5-pro or mimo-v2-flash"
+            "Invalid {field} '{trimmed}'. Expected a XiaomiMiMo model id such as mimo-v2.5-pro, mimo-v2.5-tts, or mimo-v2-tts"
         ))
     })
 }

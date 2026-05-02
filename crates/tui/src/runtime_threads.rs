@@ -1532,6 +1532,7 @@ impl RuntimeThreadManager {
             .map(crate::config::LspConfigToml::into_runtime);
         let engine_cfg = EngineConfig {
             model: thread.model.clone(),
+            api_base_url: self.config.xiaomimimo_base_url(),
             workspace: thread.workspace.clone(),
             allow_shell: thread.allow_shell,
             trust_mode: thread.trust_mode,

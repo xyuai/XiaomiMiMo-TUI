@@ -199,6 +199,8 @@ fn non_yolo_mode_retains_default_defer_policy() {
     assert!(!should_default_defer_tool("exec_shell", AppMode::Agent));
     assert!(should_default_defer_tool("exec_shell", AppMode::Plan));
     assert!(!should_default_defer_tool("read_file", AppMode::Agent));
+    assert!(!should_default_defer_tool("speech", AppMode::Agent));
+    assert!(!should_default_defer_tool("tts", AppMode::Agent));
     assert!(should_default_defer_tool(
         "mcp_read_resource",
         AppMode::Agent

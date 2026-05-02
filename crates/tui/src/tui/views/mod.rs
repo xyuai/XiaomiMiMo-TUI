@@ -945,7 +945,7 @@ impl ConfigView {
 
 fn config_hint_for_key(key: &str) -> &'static str {
     match key {
-        "model" => "mimo-v2.5-pro | mimo-v2-flash | xiaomimimo-*",
+        "model" => "mimo-v2.5-pro | mimo-v2.5 | mimo-v2.5-tts | mimo-v2-tts | xiaomimimo-*",
         "approval_mode" => "auto | suggest | never",
         "auto_compact"
         | "calm_mode"
@@ -960,7 +960,9 @@ fn config_hint_for_key(key: &str) -> &'static str {
         "sidebar_width" => "10..=50",
         "sidebar_focus" => "auto | plan | todos | tasks | agents",
         "max_history" => "integer (0 allowed)",
-        "default_model" => "mimo-v2.5-pro | mimo-v2-flash | xiaomimimo-* | none/default",
+        "default_model" => {
+            "mimo-v2.5-pro | mimo-v2.5 | mimo-v2.5-tts | mimo-v2-tts | xiaomimimo-* | none/default"
+        }
         "mcp_config_path" => "path to mcp.json",
         _ => "",
     }
@@ -1510,7 +1512,10 @@ impl ModalView for SubAgentsView {
                     .title_bottom(Line::from(vec![
                         Span::styled(" Esc to close ", Style::default().fg(palette::TEXT_MUTED)),
                         Span::styled(" R to refresh ", Style::default().fg(palette::TEXT_MUTED)),
-                        Span::styled(scroll_indicator, Style::default().fg(palette::XIAOMIMIMO_SKY)),
+                        Span::styled(
+                            scroll_indicator,
+                            Style::default().fg(palette::XIAOMIMIMO_SKY),
+                        ),
                     ]))
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(palette::BORDER_COLOR))
@@ -1637,7 +1642,11 @@ fn format_agent_status(
     use ratatui::style::Style;
 
     match status {
-        SubAgentStatus::Running => ("running", Style::default().fg(palette::XIAOMIMIMO_SKY), None),
+        SubAgentStatus::Running => (
+            "running",
+            Style::default().fg(palette::XIAOMIMIMO_SKY),
+            None,
+        ),
         SubAgentStatus::Completed => (
             "completed",
             Style::default().fg(palette::XIAOMIMIMO_BLUE),

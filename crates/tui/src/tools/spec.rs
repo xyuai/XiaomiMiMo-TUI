@@ -94,6 +94,14 @@ pub struct ToolContext {
     /// to a permissive default that mirrors pre-v0.7.0 behavior so tests and
     /// other contexts that don't construct a real policy keep working.
     pub network_policy: Option<NetworkPolicyDecider>,
+    /// Active XiaomiMiMo/OpenAI-compatible API client for model-visible tools
+    /// that need to call first-party endpoints directly (for example speech
+    /// synthesis). Optional so unit tests and offline contexts can still
+    /// construct tool contexts without credentials.
+    pub xiaomimimo_client: Option<crate::client::XiaomiMiMoClient>,
+    /// Effective configured API base URL. This is non-secret metadata used in
+    /// tool output and policy checks; API keys are never exposed through tools.
+    pub xiaomimimo_base_url: Option<String>,
     /// Durable runtime services for task, gate, PR-attempt, GitHub evidence,
     /// and automation tools.
     pub runtime: RuntimeToolServices,
@@ -123,6 +131,8 @@ impl ToolContext {
             state_namespace: "workspace".to_string(),
             trusted_external_paths: Vec::new(),
             network_policy: None,
+            xiaomimimo_client: None,
+            xiaomimimo_base_url: None,
             runtime: RuntimeToolServices::default(),
             cancel_token: None,
         }
@@ -151,6 +161,8 @@ impl ToolContext {
             state_namespace: "workspace".to_string(),
             trusted_external_paths: Vec::new(),
             network_policy: None,
+            xiaomimimo_client: None,
+            xiaomimimo_base_url: None,
             runtime: RuntimeToolServices::default(),
             cancel_token: None,
         }
@@ -179,6 +191,8 @@ impl ToolContext {
             state_namespace: "workspace".to_string(),
             trusted_external_paths: Vec::new(),
             network_policy: None,
+            xiaomimimo_client: None,
+            xiaomimimo_base_url: None,
             runtime: RuntimeToolServices::default(),
             cancel_token: None,
         }
@@ -188,6 +202,18 @@ impl ToolContext {
     #[must_use]
     pub fn with_network_policy(mut self, policy: NetworkPolicyDecider) -> Self {
         self.network_policy = Some(policy);
+        self
+    }
+
+    /// Attach the active XiaomiMiMo client and non-secret base URL metadata.
+    #[must_use]
+    pub fn with_xiaomimimo_client(
+        mut self,
+        client: Option<crate::client::XiaomiMiMoClient>,
+        base_url: impl Into<String>,
+    ) -> Self {
+        self.xiaomimimo_client = client;
+        self.xiaomimimo_base_url = Some(base_url.into());
         self
     }
 

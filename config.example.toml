@@ -37,7 +37,7 @@ max_subagents = 5
 [providers.xiaomimimo]
 # api_key = "YOUR_XIAOMIMIMO_API_KEY"
 # base_url = "https://token-plan-cn.xiaomimimo.com/v1"
-# model = "mimo-v2.5-pro" # also: mimo-v2.5, mimo-v2-pro, mimo-v2-omni, mimo-v2-flash
+# model = "mimo-v2.5-pro" # also: mimo-v2.5, mimo-v2-pro, mimo-v2-omni, mimo-v2-flash, mimo-v2-tts, mimo-v2.5-tts*
 
 [providers.nvidia_nim]
 # api_key = "YOUR_NVIDIA_API_KEY"

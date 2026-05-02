@@ -383,7 +383,7 @@ pub const COMMANDS: &[CommandInfo] = &[
 fn smoke_test_invocation(command: &CommandInfo) -> String {
     match command.name {
         "help" => "/help clear",
-        "model" => "/model mimo-v2-flash",
+        "model" => "/model mimo-v2.5-tts",
         "provider" => "/provider xiaomimimo",
         "queue" => "/queue list",
         "note" => "/note slash command smoke test",
