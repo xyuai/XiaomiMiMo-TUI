@@ -102,6 +102,9 @@ enum Commands {
     Doctor(TuiPassthroughArgs),
     /// List live XiaomiMiMo API models via the TUI binary.
     Models(TuiPassthroughArgs),
+    /// Generate speech audio via the TUI binary.
+    #[command(visible_alias = "tts")]
+    Speech(TuiPassthroughArgs),
     /// List saved TUI sessions.
     Sessions(TuiPassthroughArgs),
     /// Resume a saved TUI session.
@@ -392,6 +395,9 @@ fn run() -> Result<()> {
         }
         Some(Commands::Models(args)) => {
             delegate_to_tui(&cli, &resolved_runtime, tui_args("models", args))
+        }
+        Some(Commands::Speech(args)) => {
+            delegate_to_tui(&cli, &resolved_runtime, tui_args("speech", args))
         }
         Some(Commands::Sessions(args)) => {
             delegate_to_tui(&cli, &resolved_runtime, tui_args("sessions", args))

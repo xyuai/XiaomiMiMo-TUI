@@ -3,6 +3,7 @@
 pub mod api_key;
 pub mod trust_directory;
 pub mod welcome;
+pub mod workspace;
 
 use std::path::{Path, PathBuf};
 
@@ -22,7 +23,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(block, area);
 
     let content_width = 76.min(area.width.saturating_sub(4));
-    let content_height = 20.min(area.height.saturating_sub(4));
+    let content_height = 22.min(area.height.saturating_sub(4));
     let content_area = Rect {
         x: (area.width - content_width) / 2,
         y: (area.height - content_height) / 2,
@@ -32,6 +33,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
 
     let lines = match app.onboarding {
         OnboardingState::Welcome => welcome::lines(),
+        OnboardingState::Workspace => workspace::lines(app),
         OnboardingState::ApiKey => api_key::lines(app),
         OnboardingState::TrustDirectory => trust_directory::lines(app),
         OnboardingState::Tips => tips_lines(),
@@ -66,8 +68,13 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
 
 fn onboarding_step(app: &App) -> (usize, usize) {
     let needs_trust = !app.trust_mode && needs_trust(&app.workspace);
+    let workspace_step = if app.onboarding_needs_workspace { 1 } else { 0 };
+    let api_key_step = if app.onboarding_needs_api_key { 1 } else { 0 };
     let mut total = 2; // Welcome + Tips
-    if app.onboarding_needs_api_key {
+    if workspace_step == 1 {
+        total += 1;
+    }
+    if api_key_step == 1 {
         total += 1;
     }
     if needs_trust {
@@ -76,14 +83,9 @@ fn onboarding_step(app: &App) -> (usize, usize) {
 
     let step = match app.onboarding {
         OnboardingState::Welcome => 1,
-        OnboardingState::ApiKey => 2,
-        OnboardingState::TrustDirectory => {
-            if app.onboarding_needs_api_key {
-                3
-            } else {
-                2
-            }
-        }
+        OnboardingState::Workspace => 2,
+        OnboardingState::ApiKey => 2 + workspace_step,
+        OnboardingState::TrustDirectory => 2 + workspace_step + api_key_step,
         OnboardingState::Tips => total,
         OnboardingState::None => total,
     };
@@ -123,10 +125,7 @@ pub fn tips_lines() -> Vec<ratatui::text::Line<'static>> {
                     .fg(palette::TEXT_PRIMARY)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(
-                " 打开工作区",
-                Style::default().fg(palette::TEXT_MUTED),
-            ),
+            Span::styled(" 打开工作区", Style::default().fg(palette::TEXT_MUTED)),
         ]),
     ]
 }
@@ -148,6 +147,45 @@ pub fn mark_onboarded() -> std::io::Result<PathBuf> {
     }
     std::fs::write(&path, "")?;
     Ok(path)
+}
+
+pub fn default_workspace_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join("XiaomiMiMo-Workspace"))
+}
+
+pub fn prepare_workspace(raw: &str, fallback: &Path) -> std::io::Result<PathBuf> {
+    let raw = raw.trim().trim_matches('"').trim_matches('\'');
+    let path = if raw.is_empty() {
+        default_workspace_path().unwrap_or_else(|| fallback.to_path_buf())
+    } else if let Some(stripped) = raw.strip_prefix("~/").or_else(|| raw.strip_prefix("~\\")) {
+        dirs::home_dir()
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotFound, "Home directory not found")
+            })?
+            .join(stripped)
+    } else if raw == "~" {
+        dirs::home_dir().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "Home directory not found")
+        })?
+    } else {
+        PathBuf::from(raw)
+    };
+
+    let path = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+
+    if path.exists() && !path.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Selected path exists but is not a directory",
+        ));
+    }
+
+    std::fs::create_dir_all(&path)?;
+    path.canonicalize()
 }
 
 pub fn needs_trust(workspace: &Path) -> bool {

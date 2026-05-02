@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use base64::{Engine as _, engine::general_purpose};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -119,6 +120,30 @@ pub struct AvailableModel {
     pub id: String,
     pub owned_by: Option<String>,
     pub created: Option<u64>,
+}
+
+/// Request payload for MiMo speech synthesis models.
+///
+/// MiMo-V2.5-TTS uses the OpenAI-compatible `/v1/chat/completions` endpoint:
+/// the optional style/voice instruction is sent as a `user` message, while the
+/// text to synthesize must be sent as an `assistant` message.
+#[derive(Debug, Clone)]
+pub struct SpeechSynthesisRequest {
+    pub model: String,
+    pub text: String,
+    pub instruction: Option<String>,
+    pub audio_format: String,
+    pub voice: Option<String>,
+}
+
+/// Decoded speech synthesis result.
+#[derive(Debug, Clone)]
+pub struct SpeechSynthesisResponse {
+    pub model: String,
+    pub audio_format: String,
+    pub audio_bytes: Vec<u8>,
+    pub transcript: Option<String>,
+    pub voice: Option<String>,
 }
 
 /// Client for XiaomiMiMo's OpenAI-compatible APIs.
@@ -399,6 +424,49 @@ pub(super) fn api_url(base_url: &str, path: &str) -> String {
     )
 }
 
+fn normalize_audio_format(format: &str) -> String {
+    let normalized = format.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        "wav".to_string()
+    } else {
+        normalized
+    }
+}
+
+fn parse_speech_audio_response(payload: &Value) -> Result<(Vec<u8>, Option<String>)> {
+    let audio = payload
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())
+        .and_then(|choice| {
+            choice
+                .get("message")
+                .and_then(|message| message.get("audio"))
+                .or_else(|| choice.get("delta").and_then(|delta| delta.get("audio")))
+        })
+        .or_else(|| payload.get("audio"))
+        .context("Speech synthesis response did not include choices[0].message.audio")?;
+
+    let data = audio
+        .get("data")
+        .and_then(Value::as_str)
+        .context("Speech synthesis response did not include audio.data")?
+        .trim();
+    let data = data
+        .split_once(',')
+        .map(|(_, base64)| base64.trim())
+        .unwrap_or(data);
+    let audio_bytes = general_purpose::STANDARD
+        .decode(data)
+        .context("Failed to decode speech audio base64 data")?;
+    let transcript = audio
+        .get("transcript")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
+    Ok((audio_bytes, transcript))
+}
+
 // === XiaomiMiMoClient ===
 
 /// Returns true when XIAOMIMIMO_FORCE_HTTP1 is set to a truthy value
@@ -495,6 +563,98 @@ impl XiaomiMiMoClient {
         let response_text = response.text().await.unwrap_or_default();
 
         parse_models_response(&response_text)
+    }
+
+    /// Generate speech with the MiMo-V2.5-TTS series.
+    ///
+    /// The target text is deliberately placed in an `assistant` message because
+    /// that is what Xiaomi MiMo's TTS endpoint expects. The optional
+    /// `instruction` becomes a `user` message and controls voice style, voice
+    /// design, or voice-clone performance; it is not spoken verbatim.
+    pub async fn synthesize_speech(
+        &self,
+        request: SpeechSynthesisRequest,
+    ) -> Result<SpeechSynthesisResponse> {
+        let model = request.model.trim().to_string();
+        if model.is_empty() {
+            anyhow::bail!("Speech model cannot be empty");
+        }
+        let text = request.text.trim().to_string();
+        if text.is_empty() {
+            anyhow::bail!("Speech text cannot be empty");
+        }
+
+        let audio_format = normalize_audio_format(&request.audio_format);
+        let model_lower = model.to_ascii_lowercase();
+        let instruction = request
+            .instruction
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+
+        let voice = request
+            .voice
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+
+        if model_lower.contains("voicedesign") && instruction.is_none() {
+            anyhow::bail!(
+                "Model '{model}' requires a voice design prompt. Pass --voice-prompt or --instruction."
+            );
+        }
+        if model_lower.contains("voiceclone") && voice.is_none() {
+            anyhow::bail!(
+                "Model '{model}' requires cloned voice data. Pass --clone-voice <mp3|wav> or --voice <data-uri>."
+            );
+        }
+
+        let mut messages = Vec::new();
+        messages.push(json!({
+            "role": "user",
+            "content": instruction.unwrap_or(""),
+        }));
+        messages.push(json!({
+            "role": "assistant",
+            "content": text,
+        }));
+
+        let mut audio = json!({
+            "format": audio_format.clone(),
+        });
+        if let Some(voice) = voice.as_deref() {
+            audio["voice"] = json!(voice);
+        }
+
+        let body = json!({
+            "model": model,
+            "messages": messages,
+            "audio": audio,
+        });
+
+        let url = api_url(&self.base_url, "chat/completions");
+        let response = self
+            .send_with_retry(|| self.http_client.post(&url).json(&body))
+            .await?;
+        let status = response.status();
+        if !status.is_success() {
+            let error_text = bounded_error_text(response, ERROR_BODY_MAX_BYTES).await;
+            anyhow::bail!("Speech synthesis failed: HTTP {status}: {error_text}");
+        }
+
+        let response_text = response.text().await.unwrap_or_default();
+        let payload: Value = serde_json::from_str(&response_text)
+            .with_context(|| "Failed to parse speech synthesis response JSON")?;
+        let (audio_bytes, transcript) = parse_speech_audio_response(&payload)?;
+
+        Ok(SpeechSynthesisResponse {
+            model,
+            audio_format,
+            audio_bytes,
+            transcript,
+            voice,
+        })
     }
 
     async fn wait_for_rate_limit(&self) {
@@ -936,6 +1096,25 @@ mod tests {
             ),
             "https://token-plan-cn.xiaomimimo.com/beta/chat/completions"
         );
+    }
+
+    #[test]
+    fn parses_speech_audio_response() {
+        let payload = json!({
+            "choices": [
+                {
+                    "message": {
+                        "audio": {
+                            "data": "aGVsbG8=",
+                            "transcript": "hello"
+                        }
+                    }
+                }
+            ]
+        });
+        let (audio, transcript) = parse_speech_audio_response(&payload).expect("speech audio");
+        assert_eq!(audio, b"hello");
+        assert_eq!(transcript.as_deref(), Some("hello"));
     }
 
     #[test]

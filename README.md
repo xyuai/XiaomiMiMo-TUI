@@ -11,7 +11,9 @@ XiaomiMiMo-TUI 是一个为 Xiaomi MiMo 适配的终端 TUI 客户端。
 - **MiMo 对话 TUI**：在终端中使用 Xiaomi MiMo 进行多轮对话。
 - **OpenAI 兼容接口**：默认使用 Xiaomi MiMo Token Plan 套餐专属 OpenAI-compatible API 与 Base URL，也可通过配置覆盖。
 - **模型配置**：默认模型为 `mimo-v2.5-pro`，可通过配置文件、环境变量或命令行切换。
+- **语音合成**：新增 `speech`/`tts` 命令，支持 MiMo-V2.5-TTS 内置音色、声音设计和声音克隆。
 - **会话管理**：支持会话保存、恢复和历史记录。
+- **启动引导**：首次启动会引导创建或选择工作区文件夹，避免误把 Downloads 等大目录作为默认工作区。
 - **工具工作流**：保留原 TUI 架构中的工具调用、文件/命令辅助等能力。
 - **Windows 发布包**：当前 Release 优先提供 Windows x64 可执行文件。
 
@@ -35,6 +37,28 @@ $env:XIAOMIMIMO_API_KEY="your-api-key"
 ```
 
 > 从 v0.5.2 开始，工作区快照默认关闭，避免在 `Downloads` 等大目录启动后发送消息前扫描整个目录。若你在项目目录中需要 `/restore` 快照功能，可在 `~/.xiaomimimo/config.toml` 中手动开启 `[snapshots] enabled = true`。
+
+> 首次启动时会提示创建或选择工作区文件夹。推荐使用独立目录，例如 `~/XiaomiMiMo-Workspace`，不要直接把下载目录、桌面根目录或磁盘根目录作为长期工作区。
+
+### 语音合成
+
+语音功能使用 MiMo-V2.5-TTS 系列模型，通过 OpenAI 兼容的 Chat Completions 接口生成音频文件：
+
+```powershell
+# 内置音色
+.\xiaomimimo.exe speech "你好，这是一段 MiMo 语音合成测试。" --voice 冰糖 -o hello.wav
+
+# 可使用别名 tts
+.\xiaomimimo.exe tts "欢迎使用 XiaomiMiMo-TUI。" --instruction "温柔、自然、语速稍慢" -o welcome.wav
+
+# 声音设计
+.\xiaomimimo.exe speech "今晚的故事现在开始。" --voice-prompt "温暖沉稳的中文男声，像深夜电台主持人" -o radio.wav
+
+# 声音克隆（支持 mp3/wav 样本，base64 后不超过 10 MB）
+.\xiaomimimo.exe speech "这是一段克隆音色测试。" --clone-voice .\voice.wav -o clone.wav
+```
+
+常用内置音色：`mimo_default`、`冰糖`、`茉莉`、`苏打`、`白桦`、`Mia`、`Chloe`、`Milo`、`Dean`。
 
 ### 从源码运行
 
@@ -71,7 +95,7 @@ XIAOMIMIMO_MODEL=mimo-v2.5-pro
 
 ## 发布版本
 
-当前版本：`0.5.1`
+当前版本：`0.5.3`
 
 Windows x64 Release 资产：
 

@@ -223,6 +223,7 @@ mod tests {
         let options = TuiOptions {
             model: "mimo-v2.5-pro".to_string(),
             workspace: tmpdir.path().to_path_buf(),
+            workspace_explicit: true,
             allow_shell: false,
             use_alt_screen: true,
             use_mouse_capture: false,

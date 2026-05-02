@@ -744,9 +744,7 @@ async fn run_event_loop(
                                     crate::tui::notifications::humanize_duration(turn_elapsed);
                                 let token_label =
                                     format_token_count_compact(u64::from(turn_tokens));
-                                format!(
-                                    "xiaomimimo: turn complete ({human}, {token_label} tokens)"
-                                )
+                                format!("xiaomimimo: turn complete ({human}, {token_label} tokens)")
                             } else {
                                 "xiaomimimo: turn complete".to_string()
                             };
@@ -1207,7 +1205,10 @@ async fn run_event_loop(
                     preview = %text.chars().take(80).collect::<String>(),
                     "Received bracketed paste event"
                 );
-                if app.onboarding == OnboardingState::ApiKey {
+                if app.onboarding == OnboardingState::Workspace {
+                    // Paste into workspace path input
+                    app.insert_onboarding_workspace_str(text);
+                } else if app.onboarding == OnboardingState::ApiKey {
                     // Paste into API key input
                     app.insert_api_key_str(text);
                     sync_api_key_validation_status(app, false);
@@ -1285,7 +1286,9 @@ async fn run_event_loop(
             if app.onboarding != OnboardingState::None {
                 let advance_onboarding = |app: &mut App| {
                     app.status_message = None;
-                    if app.onboarding_needs_api_key {
+                    if app.onboarding_needs_workspace {
+                        app.onboarding = OnboardingState::Workspace;
+                    } else if app.onboarding_needs_api_key {
                         app.onboarding = OnboardingState::ApiKey;
                     } else if !app.trust_mode && onboarding::needs_trust(&app.workspace) {
                         app.onboarding = OnboardingState::TrustDirectory;
@@ -1299,15 +1302,76 @@ async fn run_event_loop(
                         let _ = engine_handle.send(Op::Shutdown).await;
                         return Ok(());
                     }
-                    KeyCode::Esc if app.onboarding == OnboardingState::ApiKey => {
+                    KeyCode::Esc
+                        if matches!(
+                            app.onboarding,
+                            OnboardingState::Workspace | OnboardingState::ApiKey
+                        ) =>
+                    {
+                        let previous = app.onboarding;
                         app.onboarding = OnboardingState::Welcome;
-                        app.api_key_input.clear();
-                        app.api_key_cursor = 0;
+                        if previous == OnboardingState::ApiKey {
+                            app.api_key_input.clear();
+                            app.api_key_cursor = 0;
+                        }
                         app.status_message = None;
                     }
                     KeyCode::Enter => match app.onboarding {
                         OnboardingState::Welcome => {
                             advance_onboarding(app);
+                        }
+                        OnboardingState::Workspace => {
+                            match onboarding::prepare_workspace(
+                                &app.onboarding_workspace_input,
+                                &app.workspace,
+                            ) {
+                                Ok(workspace) => {
+                                    app.workspace = workspace.clone();
+                                    let agents_skills_dir =
+                                        workspace.join(".agents").join("skills");
+                                    let local_skills_dir = workspace.join("skills");
+                                    app.skills_dir = if agents_skills_dir.exists() {
+                                        agents_skills_dir
+                                    } else if local_skills_dir.exists() {
+                                        local_skills_dir
+                                    } else {
+                                        config.skills_dir()
+                                    };
+                                    app.runtime_services.shell_manager =
+                                        Some(crate::tools::shell::new_shared_shell_manager(
+                                            workspace.clone(),
+                                        ));
+                                    app.runtime_services.task_manager = Some(task_manager.clone());
+                                    app.runtime_services.task_data_dir =
+                                        Some(task_manager.data_dir());
+                                    app.workspace_context = None;
+                                    app.workspace_context_refreshed_at = None;
+                                    app.project_doc = None;
+                                    app.onboarding_needs_workspace = false;
+                                    app.onboarding_workspace_input =
+                                        workspace.display().to_string();
+                                    app.onboarding_workspace_cursor =
+                                        app.onboarding_workspace_input.chars().count();
+
+                                    let _ = engine_handle.send(Op::Shutdown).await;
+                                    let engine_config = build_engine_config(app, config);
+                                    engine_handle = spawn_engine(engine_config, config);
+                                    let _ = engine_handle
+                                        .send(Op::SyncSession {
+                                            messages: app.api_messages.clone(),
+                                            system_prompt: app.system_prompt.clone(),
+                                            model: app.model.clone(),
+                                            workspace: app.workspace.clone(),
+                                        })
+                                        .await;
+
+                                    advance_onboarding(app);
+                                }
+                                Err(err) => {
+                                    app.status_message =
+                                        Some(format!("无法创建或使用工作区：{err}"));
+                                }
+                            }
                         }
                         OnboardingState::ApiKey => {
                             let key = app.api_key_input.trim().to_string();
@@ -1373,19 +1437,54 @@ async fn run_event_loop(
                         app.status_message = None;
                         app.onboarding = OnboardingState::Tips;
                     }
+                    KeyCode::Backspace if app.onboarding == OnboardingState::Workspace => {
+                        app.delete_onboarding_workspace_char();
+                    }
+                    KeyCode::Left if app.onboarding == OnboardingState::Workspace => {
+                        app.move_onboarding_workspace_cursor_left();
+                    }
+                    KeyCode::Right if app.onboarding == OnboardingState::Workspace => {
+                        app.move_onboarding_workspace_cursor_right();
+                    }
+                    KeyCode::Home if app.onboarding == OnboardingState::Workspace => {
+                        app.move_onboarding_workspace_cursor_start();
+                    }
+                    KeyCode::End if app.onboarding == OnboardingState::Workspace => {
+                        app.move_onboarding_workspace_cursor_end();
+                    }
                     KeyCode::Backspace if app.onboarding == OnboardingState::ApiKey => {
                         app.delete_api_key_char();
                         sync_api_key_validation_status(app, false);
                     }
-                    KeyCode::Char(c) if app.onboarding == OnboardingState::ApiKey => {
-                        app.insert_api_key_char(c);
-                        sync_api_key_validation_status(app, false);
+                    KeyCode::Char('v') | KeyCode::Char('V')
+                        if is_paste_shortcut(&key)
+                            && app.onboarding == OnboardingState::Workspace =>
+                    {
+                        // Cmd+V / Ctrl+V paste (bracketed paste handled above)
+                        app.paste_onboarding_workspace_from_clipboard();
                     }
                     KeyCode::Char('v') | KeyCode::Char('V')
                         if is_paste_shortcut(&key) && app.onboarding == OnboardingState::ApiKey =>
                     {
                         // Cmd+V / Ctrl+V paste (bracketed paste handled above)
                         app.paste_api_key_from_clipboard();
+                        sync_api_key_validation_status(app, false);
+                    }
+                    KeyCode::Char(c)
+                        if app.onboarding == OnboardingState::Workspace
+                            && (key.modifiers.is_empty()
+                                || key.modifiers == KeyModifiers::SHIFT
+                                || key.modifiers == KeyModifiers::NONE) =>
+                    {
+                        app.insert_onboarding_workspace_char(c);
+                    }
+                    KeyCode::Char(c)
+                        if app.onboarding == OnboardingState::ApiKey
+                            && (key.modifiers.is_empty()
+                                || key.modifiers == KeyModifiers::SHIFT
+                                || key.modifiers == KeyModifiers::NONE) =>
+                    {
+                        app.insert_api_key_char(c);
                         sync_api_key_validation_status(app, false);
                     }
                     _ => {}
@@ -2440,23 +2539,16 @@ fn validate_api_key_for_onboarding(api_key: &str) -> ApiKeyValidation {
         return ApiKeyValidation::Reject("API Key 不能为空。".to_string());
     }
     if trimmed.contains(char::is_whitespace) {
-        return ApiKeyValidation::Reject(
-            "API Key 格式异常（包含空白字符）。".to_string(),
-        );
+        return ApiKeyValidation::Reject("API Key 格式异常（包含空白字符）。".to_string());
     }
     if trimmed.len() < 16 {
         return ApiKeyValidation::Accept {
-            warning: Some(
-                "API Key 看起来较短，请确认已完整复制；特殊格式仍允许继续。"
-                    .to_string(),
-            ),
+            warning: Some("API Key 看起来较短，请确认已完整复制；特殊格式仍允许继续。".to_string()),
         };
     }
     if !trimmed.contains('-') {
         return ApiKeyValidation::Accept {
-            warning: Some(
-                "API Key 格式看起来不常见，请确认已复制完整 Key。".to_string(),
-            ),
+            warning: Some("API Key 格式看起来不常见，请确认已复制完整 Key。".to_string()),
         };
     }
     ApiKeyValidation::Accept { warning: None }

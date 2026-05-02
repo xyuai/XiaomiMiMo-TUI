@@ -523,6 +523,7 @@ mod tests {
         let options = TuiOptions {
             model: "mimo-v2-flash".to_string(),
             workspace: PathBuf::from("."),
+            workspace_explicit: true,
             allow_shell: false,
             use_alt_screen: true,
             use_mouse_capture: false,

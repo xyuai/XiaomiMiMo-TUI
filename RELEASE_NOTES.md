@@ -1,26 +1,24 @@
-# XiaomiMiMo-TUI v0.5.2
+# XiaomiMiMo-TUI v0.5.3
 
-本版本主要修复 Windows Release 用户从“下载/Downloads”等大目录直接启动后，发送消息长期无回复的问题。
+This release improves first-run onboarding and adds MiMo-V2.5-TTS speech synthesis support.
 
-## 修复内容
+## Changes
 
-- 默认关闭工作区 side-git snapshots，避免首次发送消息前对整个 Downloads 目录执行 `git add -A` 导致卡住。
-- 新建配置文件会自动写入 `[snapshots] enabled = false`；如需要 `/restore` 快照能力，可在项目目录中手动开启。
-- `xiaomimimo-windows-x64.exe` 现在可直接识别同目录的 `xiaomimimo-tui-windows-x64.exe`，不再必须手动改名为 `xiaomimimo-tui.exe`。
-- Windows Release 同时附带短文件名 `xiaomimimo.exe` 与 `xiaomimimo-tui.exe`，方便直接运行。
+- Added a first-run onboarding step to create or select a workspace folder.
+- Users can type or paste a folder path; pressing Enter creates or uses that folder.
+- The default workspace is `XiaomiMiMo-Workspace` under the user's home directory.
+- After selecting a workspace, the TUI refreshes its workspace, shell default directory, skills directory, and engine session context.
+- Fixed the onboarding API Key input order so Ctrl+V paste is handled before normal character input.
+- Added `xiaomimimo speech` with `tts` alias for non-streaming speech synthesis.
+- Speech supports built-in voices (`mimo-v2.5-tts`), voice design (`mimo-v2.5-tts-voicedesign`), and voice clone (`mimo-v2.5-tts-voiceclone`).
+- Voice clone accepts `.mp3` and `.wav` samples and sends them as `data:audio/...;base64,...` voice payloads.
 
-## 使用建议
+## Suggestions
 
-- 普通聊天：直接运行 `xiaomimimo.exe` 或 `xiaomimimo-tui.exe`。
-- 若在大目录中启动，建议保持 snapshots 关闭。
-- 若需要项目快照恢复功能，请进入项目文件夹后在配置中开启：
+- Normal users can run `xiaomimimo.exe` or `xiaomimimo-tui.exe` and follow the startup guide.
+- Use a dedicated folder per project. Avoid using Downloads, Desktop root, or drive root as the long-term workspace.
 
-```toml
-[snapshots]
-enabled = true
-```
-
-## Windows 资产
+## Windows assets
 
 - `xiaomimimo.exe`
 - `xiaomimimo-tui.exe`

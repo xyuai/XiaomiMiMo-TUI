@@ -45,6 +45,7 @@ use crate::tui::views::ViewStack;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OnboardingState {
     Welcome,
+    Workspace,
     ApiKey,
     TrustDirectory,
     Tips,
@@ -295,6 +296,14 @@ fn sanitize_api_key_text(text: &str) -> String {
     text.chars().filter(|c| !c.is_control()).collect()
 }
 
+fn sanitize_workspace_path_text(text: &str) -> String {
+    text.chars()
+        .filter(|c| !c.is_control() || *c == '\t')
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
 const MAX_SUBMITTED_INPUT_CHARS: usize = 16_000;
 const MAX_DRAFT_HISTORY: usize = 50;
 
@@ -343,6 +352,9 @@ impl AppMode {
 pub struct TuiOptions {
     pub model: String,
     pub workspace: PathBuf,
+    /// True when the user explicitly supplied `--workspace`; first-run
+    /// onboarding should not override an explicit CLI choice.
+    pub workspace_explicit: bool,
     pub allow_shell: bool,
     /// Use the alternate screen buffer (fullscreen TUI).
     pub use_alt_screen: bool,
@@ -525,7 +537,10 @@ pub struct App {
     pub ui_theme: UiTheme,
     // Onboarding
     pub onboarding: OnboardingState,
+    pub onboarding_needs_workspace: bool,
     pub onboarding_needs_api_key: bool,
+    pub onboarding_workspace_input: String,
+    pub onboarding_workspace_cursor: usize,
     pub api_key_input: String,
     pub api_key_cursor: usize,
     // Hooks system
@@ -798,6 +813,7 @@ impl App {
         let TuiOptions {
             model,
             workspace,
+            workspace_explicit,
             allow_shell,
             use_alt_screen,
             use_mouse_capture,
@@ -811,12 +827,23 @@ impl App {
             start_in_agent_mode,
             skip_onboarding,
             yolo,
-            resume_session_id: _,
+            resume_session_id,
         } = options;
         // Check if API key exists
         let needs_api_key = !has_api_key(config);
         let was_onboarded = crate::tui::onboarding::is_onboarded();
-        let needs_onboarding = !skip_onboarding && (!was_onboarded || needs_api_key);
+        let needs_workspace = !skip_onboarding
+            && !workspace_explicit
+            && !was_onboarded
+            && resume_session_id.is_none();
+        let needs_onboarding =
+            !skip_onboarding && (!was_onboarded || needs_api_key || needs_workspace);
+        let onboarding_workspace_input = if needs_workspace {
+            String::new()
+        } else {
+            workspace.display().to_string()
+        };
+        let onboarding_workspace_cursor = onboarding_workspace_input.chars().count();
         let settings = Settings::load().unwrap_or_else(|_| Settings::default());
         let auto_compact = settings.auto_compact;
         let calm_mode = settings.calm_mode;
@@ -966,7 +993,10 @@ impl App {
             } else {
                 OnboardingState::None
             },
+            onboarding_needs_workspace: needs_workspace,
             onboarding_needs_api_key: needs_api_key,
+            onboarding_workspace_input,
+            onboarding_workspace_cursor,
             api_key_input: String::new(),
             api_key_cursor: 0,
             hooks,
@@ -2066,6 +2096,57 @@ impl App {
         }
     }
 
+    pub fn insert_onboarding_workspace_char(&mut self, c: char) {
+        let cursor = self
+            .onboarding_workspace_cursor
+            .min(char_count(&self.onboarding_workspace_input));
+        let byte_index = byte_index_at_char(&self.onboarding_workspace_input, cursor);
+        self.onboarding_workspace_input.insert(byte_index, c);
+        self.onboarding_workspace_cursor = cursor + 1;
+    }
+
+    pub fn insert_onboarding_workspace_str(&mut self, text: &str) {
+        let sanitized = sanitize_workspace_path_text(text);
+        if sanitized.is_empty() {
+            return;
+        }
+        let cursor = self
+            .onboarding_workspace_cursor
+            .min(char_count(&self.onboarding_workspace_input));
+        let byte_index = byte_index_at_char(&self.onboarding_workspace_input, cursor);
+        self.onboarding_workspace_input
+            .insert_str(byte_index, &sanitized);
+        self.onboarding_workspace_cursor = cursor + char_count(&sanitized);
+    }
+
+    pub fn delete_onboarding_workspace_char(&mut self) {
+        if self.onboarding_workspace_cursor == 0 {
+            return;
+        }
+        let target = self.onboarding_workspace_cursor.saturating_sub(1);
+        if remove_char_at(&mut self.onboarding_workspace_input, target) {
+            self.onboarding_workspace_cursor = target;
+        }
+    }
+
+    pub fn move_onboarding_workspace_cursor_left(&mut self) {
+        self.onboarding_workspace_cursor = self.onboarding_workspace_cursor.saturating_sub(1);
+    }
+
+    pub fn move_onboarding_workspace_cursor_right(&mut self) {
+        if self.onboarding_workspace_cursor < char_count(&self.onboarding_workspace_input) {
+            self.onboarding_workspace_cursor += 1;
+        }
+    }
+
+    pub fn move_onboarding_workspace_cursor_start(&mut self) {
+        self.onboarding_workspace_cursor = 0;
+    }
+
+    pub fn move_onboarding_workspace_cursor_end(&mut self) {
+        self.onboarding_workspace_cursor = char_count(&self.onboarding_workspace_input);
+    }
+
     /// Paste from clipboard into input
     pub fn paste_from_clipboard(&mut self) {
         if let Some(content) = self.clipboard.read(self.workspace.as_path()) {
@@ -2089,6 +2170,12 @@ impl App {
     pub fn paste_api_key_from_clipboard(&mut self) {
         if let Some(ClipboardContent::Text(text)) = self.clipboard.read(self.workspace.as_path()) {
             self.insert_api_key_str(&text);
+        }
+    }
+
+    pub fn paste_onboarding_workspace_from_clipboard(&mut self) {
+        if let Some(ClipboardContent::Text(text)) = self.clipboard.read(self.workspace.as_path()) {
+            self.insert_onboarding_workspace_str(&text);
         }
     }
 
@@ -2798,6 +2885,7 @@ mod tests {
         TuiOptions {
             model: "test-model".to_string(),
             workspace: PathBuf::from("."),
+            workspace_explicit: true,
             allow_shell: yolo,
             use_alt_screen: true,
             use_mouse_capture: false,

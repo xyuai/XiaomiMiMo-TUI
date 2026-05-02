@@ -588,6 +588,7 @@ mod tests {
         let options = TuiOptions {
             model: "test-model".to_string(),
             workspace: PathBuf::from("."),
+            workspace_explicit: true,
             allow_shell: false,
             use_alt_screen: true,
             use_mouse_capture: false,
