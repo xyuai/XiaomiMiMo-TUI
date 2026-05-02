@@ -96,7 +96,8 @@ impl CapacityControllerConfig {
         }
 
         if let Some(v) = capacity.xiaomimimo_v3_2_chat_prior {
-            out.model_priors.insert("xiaomimimo_v3_2_chat".to_string(), v);
+            out.model_priors
+                .insert("xiaomimimo_v3_2_chat".to_string(), v);
         }
         if let Some(v) = capacity.xiaomimimo_v3_2_reasoner_prior {
             out.model_priors
@@ -106,7 +107,8 @@ impl CapacityControllerConfig {
             out.model_priors.insert("xiaomimimo_v4_pro".to_string(), v);
         }
         if let Some(v) = capacity.xiaomimimo_v4_flash_prior {
-            out.model_priors.insert("xiaomimimo_v4_flash".to_string(), v);
+            out.model_priors
+                .insert("xiaomimimo_v4_flash".to_string(), v);
         }
         if let Some(v) = capacity.fallback_default_prior {
             out.fallback_default = v;
@@ -485,9 +487,9 @@ fn normalize_model_prior_key(model: &str) -> &str {
     } else if lower.contains("mimo-v2.5-pro")
         || lower.contains("mimo-v2-pro")
         || lower.contains("mimo-pro")
+        || lower.contains("mimo-v2.5")
+        || lower.contains("mimo-v2-omni")
     {
-        "xiaomimimo_v4_pro"
-    } else if lower.contains("mimo-v2.5") || lower.contains("mimo-v2-omni") {
         "xiaomimimo_v4_pro"
     } else if lower.contains("reasoner") || lower.contains("r1") {
         "xiaomimimo_v3_2_reasoner"
@@ -717,7 +719,10 @@ mod tests {
     #[test]
     fn v4_priors_loaded_into_default_config() {
         let cfg = CapacityControllerConfig::default();
-        assert_eq!(cfg.model_priors.get("xiaomimimo_v4_pro").copied(), Some(3.5));
+        assert_eq!(
+            cfg.model_priors.get("xiaomimimo_v4_pro").copied(),
+            Some(3.5)
+        );
         assert_eq!(
             cfg.model_priors.get("xiaomimimo_v4_flash").copied(),
             Some(4.2)

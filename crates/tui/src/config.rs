@@ -223,7 +223,9 @@ fn xiaomimimo_legacy_aliases() -> &'static [ModelDeprecation] {
 #[must_use]
 pub fn deprecation_for_model(model: &str) -> Option<&'static ModelDeprecation> {
     let lower = model.trim().to_ascii_lowercase();
-    xiaomimimo_legacy_aliases().iter().find(|d| d.alias == lower)
+    xiaomimimo_legacy_aliases()
+        .iter()
+        .find(|d| d.alias == lower)
 }
 
 /// Resolve the provider capability for a given [`ApiProvider`] and resolved
@@ -241,8 +243,8 @@ pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> Provi
     let is_1m_text = model_lower.contains("mimo-v2.5-pro")
         || model_lower == "mimo-v2.5"
         || model_lower.contains("mimo-v2-pro");
-    let is_256k_text = model_lower.contains("mimo-v2-omni")
-        || model_lower.contains("mimo-v2-flash");
+    let is_256k_text =
+        model_lower.contains("mimo-v2-omni") || model_lower.contains("mimo-v2-flash");
     let is_mimo_text = !is_tts && (is_1m_text || is_256k_text);
 
     let context_window = if is_tts {
@@ -291,15 +293,33 @@ pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> Provi
 #[must_use]
 pub fn canonical_model_name(model: &str) -> Option<&'static str> {
     match model.trim().to_ascii_lowercase().as_str() {
-        "mimo" | "xiaomimimo" | "xiaomi-mimo" | "xiaomi_mimo" | "mimo-pro" | "mimo-v25-pro" | "mimo-v2.5-pro" | "xiaomimimo-v4" | "xiaomimimo-v4-pro" | "xiaomimimo-v4pro" => Some("mimo-v2.5-pro"),
+        "mimo" | "xiaomimimo" | "xiaomi-mimo" | "xiaomi_mimo" | "mimo-pro" | "mimo-v25-pro"
+        | "mimo-v2.5-pro" | "xiaomimimo-v4" | "xiaomimimo-v4-pro" | "xiaomimimo-v4pro" => {
+            Some("mimo-v2.5-pro")
+        }
         "mimo-v25" | "mimo-v2.5" => Some("mimo-v2.5"),
         "mimo-v2-pro" => Some("mimo-v2-pro"),
         "mimo-omni" | "mimo-v2-omni" => Some("mimo-v2-omni"),
-        "mimo-flash" | "mimo-v2-flash" | "mimo-chat" | "xiaomimimo-chat" | "xiaomimimo-reasoner" | "xiaomimimo-r1" | "xiaomimimo-v3" | "xiaomimimo-v3.2" | "xiaomimimo-v4-flash" | "xiaomimimo-v4flash" => Some("mimo-v2-flash"),
+        "mimo-flash"
+        | "mimo-v2-flash"
+        | "mimo-chat"
+        | "xiaomimimo-chat"
+        | "xiaomimimo-reasoner"
+        | "xiaomimimo-r1"
+        | "xiaomimimo-v3"
+        | "xiaomimimo-v3.2"
+        | "xiaomimimo-v4-flash"
+        | "xiaomimimo-v4flash" => Some("mimo-v2-flash"),
         "mimo-v2-tts" => Some("mimo-v2-tts"),
         "mimo-tts" | "mimo-v25-tts" | "mimo-v2.5-tts" => Some("mimo-v2.5-tts"),
-        "mimo-tts-voicedesign" | "mimo-voice-design" | "mimo-v25-tts-voicedesign" | "mimo-v2.5-tts-voicedesign" => Some("mimo-v2.5-tts-voicedesign"),
-        "mimo-tts-voiceclone" | "mimo-voice-clone" | "mimo-v25-tts-voiceclone" | "mimo-v2.5-tts-voiceclone" => Some("mimo-v2.5-tts-voiceclone"),
+        "mimo-tts-voicedesign"
+        | "mimo-voice-design"
+        | "mimo-v25-tts-voicedesign"
+        | "mimo-v2.5-tts-voicedesign" => Some("mimo-v2.5-tts-voicedesign"),
+        "mimo-tts-voiceclone"
+        | "mimo-voice-clone"
+        | "mimo-v25-tts-voiceclone"
+        | "mimo-v2.5-tts-voiceclone" => Some("mimo-v2.5-tts-voiceclone"),
         _ => None,
     }
 }
@@ -670,6 +690,16 @@ pub struct SubagentsConfig {
     pub models: Option<HashMap<String, String>>,
 }
 
+/// Speech/TTS output defaults shared by the CLI command and model-visible tool.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SpeechConfig {
+    /// Default directory for generated audio when no explicit output path is
+    /// supplied. Relative paths are resolved by the caller (CLI cwd or TUI
+    /// workspace); `~` is expanded during access.
+    #[serde(default)]
+    pub output_dir: Option<String>,
+}
+
 /// Per-model context tuning.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PerModelContextConfig {
@@ -753,6 +783,10 @@ pub struct Config {
     /// Sub-agent model overrides.
     #[serde(default)]
     pub subagents: Option<SubagentsConfig>,
+
+    /// Speech/TTS output defaults.
+    #[serde(default)]
+    pub speech: Option<SpeechConfig>,
 }
 
 /// `[skills]` table — knobs for the community-skill installer.
@@ -1265,6 +1299,17 @@ impl Config {
             .unwrap_or_else(|| PathBuf::from("./memory.md"))
     }
 
+    /// Resolve the configured speech/TTS output directory, if any.
+    #[must_use]
+    pub fn speech_output_dir(&self) -> Option<PathBuf> {
+        self.speech
+            .as_ref()
+            .and_then(|speech| speech.output_dir.as_deref())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(expand_path)
+    }
+
     /// Return whether shell execution is allowed.
     #[must_use]
     pub fn allow_shell(&self) -> bool {
@@ -1598,8 +1643,8 @@ fn apply_env_overrides(config: &mut Config) {
     {
         config.default_text_model = Some(value);
     }
-    if let Ok(value) =
-        std::env::var("XIAOMIMIMO_MODEL").or_else(|_| std::env::var("XIAOMIMIMO_DEFAULT_TEXT_MODEL"))
+    if let Ok(value) = std::env::var("XIAOMIMIMO_MODEL")
+        .or_else(|_| std::env::var("XIAOMIMIMO_DEFAULT_TEXT_MODEL"))
     {
         config.default_text_model = Some(value);
     }
@@ -1619,6 +1664,14 @@ fn apply_env_overrides(config: &mut Config) {
     }
     if let Ok(value) = std::env::var("XIAOMIMIMO_MEMORY_PATH") {
         config.memory_path = Some(value);
+    }
+    if let Ok(value) = std::env::var("XIAOMIMIMO_SPEECH_OUTPUT_DIR")
+        && !value.trim().is_empty()
+    {
+        config
+            .speech
+            .get_or_insert_with(SpeechConfig::default)
+            .output_dir = Some(value);
     }
     if let Ok(value) = std::env::var("XIAOMIMIMO_ALLOW_SHELL") {
         config.allow_shell = Some(value == "1" || value.eq_ignore_ascii_case("true"));
@@ -1914,6 +1967,7 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
             per_model: override_cfg.context.per_model.or(base.context.per_model),
         },
         subagents: override_cfg.subagents.or(base.subagents),
+        speech: override_cfg.speech.or(base.speech),
     }
 }
 
@@ -2791,10 +2845,7 @@ mod tests {
         }
 
         let config = Config::load(None, None)?;
-        assert_eq!(
-            config.default_text_model.as_deref(),
-            Some("mimo-v2-flash")
-        );
+        assert_eq!(config.default_text_model.as_deref(), Some("mimo-v2-flash"));
         Ok(())
     }
 

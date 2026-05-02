@@ -22,7 +22,6 @@ mod compaction;
 mod config;
 mod core;
 mod cycle_manager;
-mod xiaomimimo_theme;
 mod error_taxonomy;
 mod eval;
 mod execpolicy;
@@ -61,6 +60,7 @@ mod ui;
 mod utils;
 mod working_set;
 mod workspace_trust;
+mod xiaomimimo_theme;
 
 use crate::config::{Config, DEFAULT_TEXT_MODEL, MAX_SUBAGENTS};
 use crate::eval::{EvalHarness, EvalHarnessConfig, ScenarioStepKind};
@@ -310,9 +310,14 @@ struct SpeechArgs {
     #[arg(value_name = "TEXT")]
     text: String,
 
-    /// Output audio path
-    #[arg(short, long, value_name = "FILE", default_value = "speech.wav")]
-    output: PathBuf,
+    /// Output audio path. Defaults to speech.<format> in --output-dir,
+    /// [speech].output_dir, or the current directory.
+    #[arg(short, long, value_name = "FILE")]
+    output: Option<PathBuf>,
+
+    /// Directory for the default speech.<format> output file when -o/--output is omitted.
+    #[arg(long = "output-dir", value_name = "DIR")]
+    output_dir: Option<PathBuf>,
 
     /// TTS model. Defaults to built-in voices, or is inferred from --voice-prompt/--clone-voice.
     #[arg(long)]
@@ -1042,7 +1047,9 @@ fn run_setup(config: &Config, workspace: &Path, args: SetupArgs) -> Result<()> {
                 println!("  · MCP config already exists at {}", mcp_path.display());
             }
         }
-        println!("    Next: edit the file, then run `xiaomimimo mcp list` or `xiaomimimo mcp tools`.");
+        println!(
+            "    Next: edit the file, then run `xiaomimimo mcp list` or `xiaomimimo mcp tools`."
+        );
     }
 
     if run_skills {
@@ -1456,7 +1463,9 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
             "  {} active provider key not configured",
             "✗".truecolor(red_r, red_g, red_b)
         );
-        println!("    Run 'xiaomimimo auth set --provider <name>' to save a key to the OS keyring.");
+        println!(
+            "    Run 'xiaomimimo auth set --provider <name>' to save a key to the OS keyring."
+        );
         false
     };
 
@@ -1979,6 +1988,7 @@ async fn run_speech(config: &Config, args: SpeechArgs) -> Result<()> {
     let SpeechArgs {
         text,
         output,
+        output_dir,
         model,
         voice,
         instruction,
@@ -2015,7 +2025,11 @@ async fn run_speech(config: &Config, args: SpeechArgs) -> Result<()> {
     let is_voice_clone = model_lower.contains("voiceclone");
 
     let instruction = combine_speech_instructions(instruction, voice_prompt);
-    if is_voice_design && instruction.as_deref().is_none_or(|value| value.trim().is_empty()) {
+    if is_voice_design
+        && instruction
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+    {
         bail!(
             "mimo-v2.5-tts-voicedesign requires --voice-prompt or --instruction to describe the voice"
         );
@@ -2035,6 +2049,11 @@ async fn run_speech(config: &Config, args: SpeechArgs) -> Result<()> {
     let format = normalize_speech_format(&format).with_context(|| {
         format!("Unsupported speech format '{format}' (allowed: wav, mp3, pcm16)")
     })?;
+    let output = resolve_speech_output_path(
+        output,
+        output_dir.or_else(|| config.speech_output_dir()),
+        &format,
+    );
 
     let client = XiaomiMiMoClient::new(config)?;
     let response = client
@@ -2116,6 +2135,25 @@ fn normalize_speech_format(format: &str) -> Option<String> {
     }
 }
 
+fn default_speech_output_name(format: &str) -> String {
+    format!(
+        "speech.{}",
+        normalize_speech_format(format).as_deref().unwrap_or("wav")
+    )
+}
+
+fn resolve_speech_output_path(
+    output: Option<PathBuf>,
+    output_dir: Option<PathBuf>,
+    format: &str,
+) -> PathBuf {
+    output.unwrap_or_else(|| {
+        output_dir
+            .unwrap_or_default()
+            .join(default_speech_output_name(format))
+    })
+}
+
 #[cfg(test)]
 mod speech_cli_tests {
     use super::*;
@@ -2126,6 +2164,22 @@ mod speech_cli_tests {
         assert_eq!(normalize_speech_format("pcm16").as_deref(), Some("pcm16"));
         assert_eq!(normalize_speech_format("pcm").as_deref(), Some("pcm16"));
         assert_eq!(normalize_speech_format("flac"), None);
+    }
+
+    #[test]
+    fn default_speech_output_tracks_requested_format() {
+        assert_eq!(
+            resolve_speech_output_path(None, None, "mp3"),
+            PathBuf::from("speech.mp3")
+        );
+        assert_eq!(
+            resolve_speech_output_path(None, Some(PathBuf::from("audio")), "pcm"),
+            PathBuf::from("audio").join("speech.pcm16")
+        );
+        assert_eq!(
+            resolve_speech_output_path(Some(PathBuf::from("custom.wav")), None, "mp3"),
+            PathBuf::from("custom.wav")
+        );
     }
 }
 
@@ -3265,6 +3319,7 @@ async fn run_exec_agent(
         lsp_config,
         runtime_services: crate::tools::spec::RuntimeToolServices::default(),
         subagent_model_overrides: config.subagent_model_overrides(),
+        speech_output_dir: config.speech_output_dir(),
     };
 
     let engine_handle = spawn_engine(engine_config, config);

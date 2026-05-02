@@ -128,6 +128,8 @@ pub struct EngineConfig {
     pub runtime_services: RuntimeToolServices,
     /// Per-role/type sub-agent model overrides already resolved from config.
     pub subagent_model_overrides: HashMap<String, String>,
+    /// Optional default directory for generated speech/TTS files.
+    pub speech_output_dir: Option<PathBuf>,
 }
 
 impl Default for EngineConfig {
@@ -155,6 +157,7 @@ impl Default for EngineConfig {
             lsp_config: None,
             runtime_services: RuntimeToolServices::default(),
             subagent_model_overrides: HashMap::new(),
+            speech_output_dir: None,
         }
     }
 }
@@ -1257,6 +1260,13 @@ impl Engine {
         // to create the HTTP client. Model-visible tools such as `speech`
         // need this to call and report the effective dedicated Base URL.
         config.api_base_url = api_config.xiaomimimo_base_url();
+        config.speech_output_dir = api_config.speech_output_dir().map(|dir| {
+            if dir.is_absolute() {
+                dir
+            } else {
+                config.workspace.join(dir)
+            }
+        });
 
         let (tx_op, rx_op) = mpsc::channel(32);
         let (tx_event, rx_event) = mpsc::channel(256);
@@ -2269,6 +2279,7 @@ impl Engine {
             self.xiaomimimo_client.clone(),
             self.config.api_base_url.clone(),
         )
+        .with_speech_output_dir(self.config.speech_output_dir.clone())
         .with_trusted_external_paths(trusted.paths().to_vec());
 
         if let Some(decider) = self.config.network_policy.as_ref() {

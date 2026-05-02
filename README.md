@@ -38,6 +38,10 @@ $env:XIAOMIMIMO_API_KEY="your-api-key"
 
 > 首次启动时会提示创建或选择工作区文件夹。推荐使用独立目录，例如 `~/XiaomiMiMo-Workspace`，不要直接把下载目录、桌面根目录或磁盘根目录作为长期工作区。
 
+### Windows 中文显示 / 编码
+
+项目文档和 Release Notes 均使用 UTF-8 编码。若在 Windows PowerShell 5.x 中看到中文乱码，建议改用 Windows Terminal + PowerShell 7，或先执行 `chcp 65001` 后再查看文本文件。
+
 ### 语音合成
 
 语音功能使用 MiMo-V2.5-TTS / MiMo-V2-TTS 系列模型，通过 Token Plan 套餐专属 OpenAI-compatible Chat Completions 接口生成音频文件。TUI 对话中模型也可以直接调用 `speech`/`tts` 工具，不需要先让用户手动执行 CLI 命令：
@@ -54,6 +58,19 @@ $env:XIAOMIMIMO_API_KEY="your-api-key"
 
 # 声音克隆（支持 mp3/wav 样本，base64 后不超过 10 MB）
 .\xiaomimimo.exe speech "这是一段克隆音色测试。" --clone-voice .\voice.wav -o clone.wav
+```
+
+省略 `-o/--output` 时，默认文件名会跟随格式生成，例如 `--format mp3` 会写入 `speech.mp3`。也可以配置默认输出目录：
+
+```toml
+[speech]
+output_dir = "~/.xiaomimimo/speech"
+```
+
+或临时使用环境变量：
+
+```powershell
+$env:XIAOMIMIMO_SPEECH_OUTPUT_DIR="$HOME\.xiaomimimo\speech"
 ```
 
 常用内置音色：`mimo_default`、`冰糖`、`茉莉`、`苏打`、`白桦`、`Mia`、`Chloe`、`Milo`、`Dean`。TUI 直连工具支持 `wav`、`mp3`、`pcm16` 输出；朗读文本按官方要求作为 assistant 消息发送，`instruction` 可用于自然语言风格控制，文本内可直接放置官方音频/风格标签。低延迟 `stream=true` 暂未作为 TUI 直连工具暴露，当前默认生成完整音频文件。
@@ -95,7 +112,7 @@ XIAOMIMIMO_MODEL=mimo-v2.5-pro
 
 ## 发布版本
 
-当前版本：`0.5.4`
+当前版本：`0.5.5`
 
 Windows x64 Release 资产：
 

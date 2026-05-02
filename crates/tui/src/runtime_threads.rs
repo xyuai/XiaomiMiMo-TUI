@@ -1562,6 +1562,7 @@ impl RuntimeThreadManager {
                 shell_manager: None,
             },
             subagent_model_overrides: self.config.subagent_model_overrides(),
+            speech_output_dir: self.config.speech_output_dir(),
         };
 
         let engine = spawn_engine(engine_cfg, &self.config);

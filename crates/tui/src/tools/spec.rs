@@ -102,6 +102,8 @@ pub struct ToolContext {
     /// Effective configured API base URL. This is non-secret metadata used in
     /// tool output and policy checks; API keys are never exposed through tools.
     pub xiaomimimo_base_url: Option<String>,
+    /// Optional configured default directory for generated speech/TTS files.
+    pub speech_output_dir: Option<PathBuf>,
     /// Durable runtime services for task, gate, PR-attempt, GitHub evidence,
     /// and automation tools.
     pub runtime: RuntimeToolServices,
@@ -133,6 +135,7 @@ impl ToolContext {
             network_policy: None,
             xiaomimimo_client: None,
             xiaomimimo_base_url: None,
+            speech_output_dir: None,
             runtime: RuntimeToolServices::default(),
             cancel_token: None,
         }
@@ -163,6 +166,7 @@ impl ToolContext {
             network_policy: None,
             xiaomimimo_client: None,
             xiaomimimo_base_url: None,
+            speech_output_dir: None,
             runtime: RuntimeToolServices::default(),
             cancel_token: None,
         }
@@ -193,6 +197,7 @@ impl ToolContext {
             network_policy: None,
             xiaomimimo_client: None,
             xiaomimimo_base_url: None,
+            speech_output_dir: None,
             runtime: RuntimeToolServices::default(),
             cancel_token: None,
         }
@@ -214,6 +219,13 @@ impl ToolContext {
     ) -> Self {
         self.xiaomimimo_client = client;
         self.xiaomimimo_base_url = Some(base_url.into());
+        self
+    }
+
+    /// Attach the configured speech output directory, if one is set.
+    #[must_use]
+    pub fn with_speech_output_dir(mut self, output_dir: Option<PathBuf>) -> Self {
+        self.speech_output_dir = output_dir;
         self
     }
 

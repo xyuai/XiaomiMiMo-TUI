@@ -19,7 +19,6 @@ use super::spec::{
     optional_bool, optional_str, required_str,
 };
 
-const DEFAULT_OUTPUT: &str = "speech.wav";
 const DEFAULT_FORMAT: &str = "wav";
 const DEFAULT_VOICE: &str = "mimo_default";
 const VOICE_CLONE_BASE64_MAX_BYTES: usize = 10 * 1024 * 1024;
@@ -75,7 +74,11 @@ impl ToolSpec for SpeechTool {
                 },
                 "output": {
                     "type": "string",
-                    "description": "Audio file path to write, relative to the workspace unless absolute. Default: speech.wav."
+                    "description": "Audio file path to write, relative to the workspace unless absolute. Default: speech.<format> in output_dir, configured [speech].output_dir, or the workspace."
+                },
+                "output_dir": {
+                    "type": "string",
+                    "description": "Directory for the default speech.<format> output file when output is omitted. Relative paths stay inside the workspace."
                 },
                 "model": {
                     "type": "string",
@@ -140,11 +143,6 @@ impl ToolSpec for SpeechTool {
             )
         })?;
 
-        let output_raw = optional_str(&input, "output")
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or(DEFAULT_OUTPUT);
-        let output_path = context.resolve_path(output_raw)?;
         let requested_format_raw = optional_str(&input, "format")
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -160,6 +158,14 @@ impl ToolSpec for SpeechTool {
                 "stream=true low-latency speech output is not implemented in the TUI direct tool yet; use stream=false to generate a complete audio file",
             ));
         }
+        let output_raw = optional_str(&input, "output")
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let output_path =
+            resolve_speech_output_path(&input, context, output_raw, &requested_format)?;
+        let output_label = output_raw
+            .map(str::to_string)
+            .unwrap_or_else(|| output_path.display().to_string());
 
         let raw_voice = optional_str(&input, "voice")
             .map(str::trim)
@@ -274,7 +280,7 @@ impl ToolSpec for SpeechTool {
             "model": response.model,
             "format": response.audio_format,
             "stream": false,
-            "output": output_raw,
+            "output": output_label,
             "absolute_output": output_path.display().to_string(),
             "bytes": response.audio_bytes.len(),
             "voice": response.voice.as_deref().map(describe_speech_voice),
@@ -332,6 +338,40 @@ fn normalize_speech_format(format: &str) -> Option<String> {
         "pcm" => Some("pcm16".to_string()),
         _ => None,
     }
+}
+
+fn default_speech_output_name(format: &str) -> String {
+    format!(
+        "speech.{}",
+        normalize_speech_format(format)
+            .as_deref()
+            .unwrap_or(DEFAULT_FORMAT)
+    )
+}
+
+fn resolve_speech_output_path(
+    input: &Value,
+    context: &ToolContext,
+    output_raw: Option<&str>,
+    format: &str,
+) -> Result<std::path::PathBuf, ToolError> {
+    if let Some(output) = output_raw {
+        return context.resolve_path(output);
+    }
+
+    let filename = default_speech_output_name(format);
+    if let Some(output_dir) = optional_str(input, "output_dir")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(context.resolve_path(output_dir)?.join(filename));
+    }
+
+    if let Some(output_dir) = context.speech_output_dir.as_ref() {
+        return Ok(output_dir.join(filename));
+    }
+
+    Ok(context.workspace.join(filename))
 }
 
 async fn encode_voice_clone_data_uri(path: &Path) -> Result<String, ToolError> {

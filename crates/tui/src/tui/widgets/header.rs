@@ -247,9 +247,10 @@ impl<'a> HeaderWidget<'a> {
         } else {
             palette::XIAOMIMIMO_SKY
         };
-        let body = if !include_prefix {
-            trimmed.to_string()
-        } else if trimmed.eq_ignore_ascii_case("max") || trimmed.eq_ignore_ascii_case("maximum") {
+        let body = if !include_prefix
+            || trimmed.eq_ignore_ascii_case("max")
+            || trimmed.eq_ignore_ascii_case("maximum")
+        {
             trimmed.to_string()
         } else {
             format!("\u{00B7} {trimmed}")

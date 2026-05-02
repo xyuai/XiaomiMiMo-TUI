@@ -20,6 +20,12 @@ mcp_config_path = "~/.xiaomimimo/mcp.json"
 notes_path = "~/.xiaomimimo/notes.txt"
 memory_path = "~/.xiaomimimo/memory.md"
 
+[speech]
+# Default directory for generated speech/TTS files when -o/--output is omitted.
+# Relative paths are resolved from the CLI cwd; inside the TUI they are resolved
+# from the active workspace.
+# output_dir = "~/.xiaomimimo/speech"
+
 # Agent safety defaults.
 allow_shell = true
 approval_policy = "on-request" # on-request | untrusted | never

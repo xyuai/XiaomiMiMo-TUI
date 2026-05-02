@@ -384,6 +384,7 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
             .map(crate::config::LspConfigToml::into_runtime),
         runtime_services: app.runtime_services.clone(),
         subagent_model_overrides: config.subagent_model_overrides(),
+        speech_output_dir: config.speech_output_dir(),
     }
 }
 
@@ -3895,7 +3896,7 @@ fn render(f: &mut Frame, app: &mut App) {
         .with_usage(
             app.total_conversation_tokens,
             sanitized_context_window,
-            app.session_cost,
+            app.displayed_session_cost(),
             sanitized_prompt_tokens,
         )
         .with_reasoning_effort(Some(effort_label))
