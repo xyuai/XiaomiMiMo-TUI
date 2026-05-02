@@ -18,13 +18,51 @@ use xiaomimimo_mcp::{McpServerDefinition, run_stdio_server};
 use xiaomimimo_secrets::Secrets;
 use xiaomimimo_state::{StateStore, ThreadListFilters};
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy)]
 enum ProviderArg {
     XiaomiMiMo,
     NvidiaNim,
     Openai,
     Openrouter,
     Novita,
+}
+
+impl std::str::FromStr for ProviderArg {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match ProviderKind::parse(value) {
+            Some(ProviderKind::XiaomiMiMo) => Ok(Self::XiaomiMiMo),
+            Some(ProviderKind::NvidiaNim) => Ok(Self::NvidiaNim),
+            Some(ProviderKind::Openai) => Ok(Self::Openai),
+            Some(ProviderKind::Openrouter) => Ok(Self::Openrouter),
+            Some(ProviderKind::Novita) => Ok(Self::Novita),
+            None => Err(format!("unknown provider '{value}'")),
+        }
+    }
+}
+
+impl ValueEnum for ProviderArg {
+    fn value_variants<'a>() -> &'a [Self] {
+        &[
+            Self::XiaomiMiMo,
+            Self::NvidiaNim,
+            Self::Openai,
+            Self::Openrouter,
+            Self::Novita,
+        ]
+    }
+
+    fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
+        let value = match self {
+            Self::XiaomiMiMo => "xiaomimimo",
+            Self::NvidiaNim => "nvidia-nim",
+            Self::Openai => "openai",
+            Self::Openrouter => "openrouter",
+            Self::Novita => "novita",
+        };
+        Some(clap::builder::PossibleValue::new(value))
+    }
 }
 
 impl From<ProviderArg> for ProviderKind {

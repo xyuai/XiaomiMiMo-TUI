@@ -222,9 +222,23 @@ fn walk_for_completions(
             rel_str.clone()
         };
         let lower = candidate.to_lowercase();
-        if needle.is_empty() || lower.starts_with(needle) {
+        let slash_folded = lower.replace('/', "");
+        let needle_slash_folded = needle.replace('/', "");
+        let parent_dir_match = needle.rsplit_once('/').is_some_and(|(parent, child)| {
+            !is_dir
+                && !parent.is_empty()
+                && !child.is_empty()
+                && lower.starts_with(&format!("{parent}/"))
+        });
+        if needle.is_empty()
+            || lower.starts_with(needle)
+            || slash_folded.starts_with(&needle_slash_folded)
+        {
             prefix_hits.push(candidate);
-        } else if lower.contains(needle) {
+        } else if lower.contains(needle)
+            || slash_folded.contains(&needle_slash_folded)
+            || parent_dir_match
+        {
             substring_hits.push(candidate);
         }
     }

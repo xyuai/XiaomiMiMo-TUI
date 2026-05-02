@@ -31,6 +31,8 @@ xiaomimimo
 
 - Windows x64
 
+Only the platform-qualified `xiaomimimo-windows-x64.exe` and `xiaomimimo-tui-windows-x64.exe` release assets are used. Legacy unqualified `.exe` aliases are not published because they duplicate those binaries.
+
 ## 配置
 
 - 默认二进制版本来自 `package.json` 中的 `xiaomimimoBinaryVersion`。

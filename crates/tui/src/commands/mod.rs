@@ -304,12 +304,6 @@ pub const COMMANDS: &[CommandInfo] = &[
         usage: "/system",
     },
     CommandInfo {
-        name: "context",
-        aliases: &[],
-        description: "Show context window usage",
-        usage: "/context",
-    },
-    CommandInfo {
         name: "undo",
         aliases: &[],
         description: "Remove last message pair",
@@ -379,6 +373,44 @@ pub const COMMANDS: &[CommandInfo] = &[
         usage: "/cost",
     },
 ];
+
+/// Conservative slash-command smoke fixture used by tests and manual audits.
+///
+/// The command avoids destructive side effects and external network access while
+/// still exercising the same registry entry and parser branch as the public
+/// slash command.
+#[cfg(test)]
+fn smoke_test_invocation(command: &CommandInfo) -> String {
+    match command.name {
+        "help" => "/help clear",
+        "model" => "/model mimo-v2-flash",
+        "provider" => "/provider xiaomimimo",
+        "queue" => "/queue list",
+        "note" => "/note slash command smoke test",
+        "attach" => "/attach missing-smoke-test-image.png",
+        "task" => "/task list",
+        "jobs" => "/jobs list",
+        "mcp" => "/mcp status",
+        "save" => "/save slash_command_smoke_session.json",
+        "load" => "/load missing-smoke-test-session.json",
+        "cycle" => "/cycle 1",
+        "recall" => "/recall",
+        "trust" => "/trust status",
+        "skill" => "/skill missing-smoke-test-skill",
+        "review" => "/review smoke-target",
+        "restore" => "/restore",
+        "rlm" => {
+            "/rlm This is a deliberately long smoke-test prompt that exercises the RLM slash command parser without starting from the usage-error branch."
+        }
+        other => {
+            if command.requires_argument() {
+                panic!("No smoke-test invocation registered for argument-taking command /{other}");
+            }
+            return command.palette_command();
+        }
+    }
+    .to_string()
+}
 
 /// Execute a slash command
 pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
@@ -647,28 +679,114 @@ mod tests {
     use crate::config::Config;
     use crate::tui::app::{App, AppAction, TuiOptions};
     use std::path::PathBuf;
+    use tempfile::TempDir;
 
     fn create_test_app() -> App {
-        let options = TuiOptions {
+        App::new(test_options(PathBuf::from(".")), &Config::default())
+    }
+
+    fn test_options(workspace: PathBuf) -> TuiOptions {
+        TuiOptions {
             model: "mimo-v2.5-pro".to_string(),
-            workspace: PathBuf::from("."),
+            skills_dir: workspace.join("skills"),
+            memory_path: workspace.join("memory.md"),
+            notes_path: workspace.join("notes.txt"),
+            mcp_config_path: workspace.join("mcp.json"),
+            workspace,
             workspace_explicit: true,
             allow_shell: false,
             use_alt_screen: true,
             use_mouse_capture: false,
             use_bracketed_paste: true,
             max_subagents: 1,
-            skills_dir: PathBuf::from("."),
-            memory_path: PathBuf::from("memory.md"),
-            notes_path: PathBuf::from("notes.txt"),
-            mcp_config_path: PathBuf::from("mcp.json"),
             use_memory: false,
             start_in_agent_mode: false,
             skip_onboarding: true,
             yolo: false,
             resume_session_id: None,
-        };
-        App::new(options, &Config::default())
+        }
+    }
+
+    fn create_test_app_in(tmpdir: &TempDir) -> App {
+        App::new(
+            test_options(tmpdir.path().to_path_buf()),
+            &Config::default(),
+        )
+    }
+
+    #[test]
+    fn command_registry_has_unique_names_and_aliases() {
+        let mut names = std::collections::BTreeSet::new();
+        let mut aliases = std::collections::BTreeMap::new();
+        for command in COMMANDS {
+            assert!(
+                names.insert(command.name),
+                "duplicate command /{}",
+                command.name
+            );
+            for alias in command.aliases {
+                assert_ne!(
+                    *alias, command.name,
+                    "command /{} aliases itself",
+                    command.name
+                );
+                assert!(
+                    get_command_info(alias).is_some(),
+                    "alias /{} for /{} is not resolvable",
+                    alias,
+                    command.name
+                );
+                if let Some(previous) = aliases.insert(*alias, command.name) {
+                    panic!(
+                        "alias /{} is registered for both /{} and /{}",
+                        alias, previous, command.name
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_registered_command_has_a_smoke_test_invocation() {
+        for command in COMMANDS {
+            let invocation = smoke_test_invocation(command);
+            assert!(
+                invocation.starts_with('/'),
+                "smoke invocation for /{} must start with slash: {}",
+                command.name,
+                invocation
+            );
+            let invoked_name = invocation
+                .trim_start_matches('/')
+                .split_whitespace()
+                .next()
+                .unwrap_or("");
+            let resolved = get_command_info(invoked_name)
+                .unwrap_or_else(|| panic!("smoke invocation is not registered: {invocation}"));
+            assert_eq!(
+                resolved.name, command.name,
+                "smoke invocation {invocation} resolved to /{} instead of /{}",
+                resolved.name, command.name
+            );
+        }
+    }
+
+    #[test]
+    fn all_safe_smoke_commands_dispatch_without_panic() {
+        let tmpdir = TempDir::new().expect("tempdir");
+        let mut app = create_test_app_in(&tmpdir);
+
+        for command in COMMANDS {
+            let invocation = smoke_test_invocation(command);
+            let result = execute(&invocation, &mut app);
+            assert!(
+                result.message.is_some()
+                    || result.action.is_some()
+                    || matches!(command.name, "help" | "sessions"),
+                "smoke invocation {invocation} for /{} returned an empty result",
+                command.name
+            );
+        }
     }
 
     #[test]

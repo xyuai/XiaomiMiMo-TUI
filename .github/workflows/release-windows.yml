@@ -37,12 +37,30 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item target\release\xiaomimimo.exe dist\xiaomimimo-windows-x64.exe
           Copy-Item target\release\xiaomimimo-tui.exe dist\xiaomimimo-tui-windows-x64.exe
-          Copy-Item target\release\xiaomimimo.exe dist\xiaomimimo.exe
-          Copy-Item target\release\xiaomimimo-tui.exe dist\xiaomimimo-tui.exe
+          $legacyAliases = @("xiaomimimo.exe", "xiaomimimo-tui.exe")
+          foreach ($alias in $legacyAliases) {
+            if (Test-Path "dist\$alias") {
+              throw "Legacy duplicate release asset '$alias' must not be generated; use the *-windows-x64.exe assets only."
+            }
+          }
           Get-FileHash -Algorithm SHA256 dist\*.exe |
             Sort-Object Path |
             ForEach-Object { "$($_.Hash.ToLower()) *$([System.IO.Path]::GetFileName($_.Path))" } |
             Set-Content -Encoding ascii dist\xiaomimimo-artifacts-sha256.txt
+          $assetNames = Get-ChildItem dist -File | ForEach-Object Name
+          $expectedNames = @(
+            "xiaomimimo-windows-x64.exe",
+            "xiaomimimo-tui-windows-x64.exe",
+            "xiaomimimo-artifacts-sha256.txt"
+          )
+          $unexpected = $assetNames | Where-Object { $_ -notin $expectedNames }
+          if ($unexpected) {
+            throw "Unexpected release asset(s): $($unexpected -join ', ')"
+          }
+          $missing = $expectedNames | Where-Object { $_ -notin $assetNames }
+          if ($missing) {
+            throw "Missing release asset(s): $($missing -join ', ')"
+          }
           Get-ChildItem dist
 
       - name: Upload build artifacts

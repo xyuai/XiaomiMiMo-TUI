@@ -25,8 +25,6 @@ XiaomiMiMo-TUI 是一个为 Xiaomi MiMo 适配的终端 TUI 客户端。
 
 - `xiaomimimo-windows-x64.exe`
 - `xiaomimimo-tui-windows-x64.exe`
-- `xiaomimimo.exe`
-- `xiaomimimo-tui.exe`
 - `xiaomimimo-artifacts-sha256.txt`
 
 设置 API Key 后运行：
@@ -104,6 +102,10 @@ Windows x64 Release 资产：
 | `xiaomimimo-windows-x64.exe` | 主命令入口 |
 | `xiaomimimo-tui-windows-x64.exe` | TUI 可执行文件 |
 | `xiaomimimo-artifacts-sha256.txt` | SHA-256 校验文件 |
+
+> Release only publishes platform-qualified canonical assets; the legacy
+> `xiaomimimo.exe` and `xiaomimimo-tui.exe` aliases are no longer uploaded,
+> so they cannot duplicate the Windows x64 binaries.
 
 ## 与 deepseektui 的关系
 

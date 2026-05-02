@@ -9,6 +9,11 @@ const ASSET_MATRIX = {
   },
 };
 
+const LEGACY_DUPLICATE_ASSETS = [
+  "xiaomimimo.exe",
+  "xiaomimimo-tui.exe",
+];
+
 function detectBinaryNames() {
   const platform = os.platform();
   const arch = os.arch();
@@ -70,6 +75,10 @@ function allReleaseAssetNames() {
   return [...allAssetNames(), CHECKSUM_MANIFEST];
 }
 
+function legacyDuplicateAssetNames() {
+  return [...LEGACY_DUPLICATE_ASSETS];
+}
+
 module.exports = {
   allAssetNames,
   allReleaseAssetNames,
@@ -77,6 +86,7 @@ module.exports = {
   checksumManifestUrl,
   detectBinaryNames,
   executableName,
+  legacyDuplicateAssetNames,
   releaseAssetUrl,
   releaseBaseUrl,
   releaseBinaryDirectory,

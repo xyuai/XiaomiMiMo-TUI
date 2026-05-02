@@ -20,8 +20,8 @@ This release improves first-run onboarding and adds MiMo-V2.5-TTS speech synthes
 
 ## Windows assets
 
-- `xiaomimimo.exe`
-- `xiaomimimo-tui.exe`
 - `xiaomimimo-windows-x64.exe`
 - `xiaomimimo-tui-windows-x64.exe`
 - `xiaomimimo-artifacts-sha256.txt`
+
+Legacy alias assets (`xiaomimimo.exe`, `xiaomimimo-tui.exe`) are intentionally omitted to avoid duplicate release resources.

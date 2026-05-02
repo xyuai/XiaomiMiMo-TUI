@@ -1099,7 +1099,7 @@ mod tests {
 
         assert_eq!(
             values.get("api_key").map(String::as_str),
-            Some("sk-d***cret")
+            Some("sk-x***cret")
         );
     }
 

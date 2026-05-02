@@ -34,18 +34,24 @@ pub fn save(app: &mut App, path: Option<&str>) -> CommandResult {
         .filter(|p| !p.as_os_str().is_empty())
         .map_or_else(|| app.workspace.clone(), std::path::Path::to_path_buf);
 
+    let final_save_path = if save_path.is_absolute() {
+        save_path.clone()
+    } else {
+        sessions_dir.join(&save_path)
+    };
+
     match std::fs::create_dir_all(&sessions_dir) {
         Ok(()) => {
             let json = match serde_json::to_string_pretty(&session) {
                 Ok(j) => j,
                 Err(e) => return CommandResult::error(format!("Failed to serialize session: {e}")),
             };
-            match std::fs::write(&save_path, json) {
+            match std::fs::write(&final_save_path, json) {
                 Ok(()) => {
                     app.current_session_id = Some(session.metadata.id.clone());
                     CommandResult::message(format!(
                         "Session saved to {} (ID: {})",
-                        save_path.display(),
+                        final_save_path.display(),
                         &session.metadata.id[..8]
                     ))
                 }
@@ -139,6 +145,17 @@ pub fn export(app: &mut App, path: Option<&str>) -> CommandResult {
         },
         PathBuf::from,
     );
+    let final_export_path = if export_path.is_absolute() {
+        export_path.clone()
+    } else {
+        app.workspace.join(&export_path)
+    };
+    if let Some(parent) = final_export_path.parent()
+        && !parent.as_os_str().is_empty()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        return CommandResult::error(format!("Failed to create export directory: {e}"));
+    }
 
     let mut content = String::new();
     content.push_str("# Chat Export\n\n");
@@ -177,8 +194,8 @@ pub fn export(app: &mut App, path: Option<&str>) -> CommandResult {
         let _ = write!(content, "{}\n\n{}\n\n---\n\n", role, body.trim());
     }
 
-    match std::fs::write(&export_path, content) {
-        Ok(()) => CommandResult::message(format!("Exported to {}", export_path.display())),
+    match std::fs::write(&final_export_path, content) {
+        Ok(()) => CommandResult::message(format!("Exported to {}", final_export_path.display())),
         Err(e) => CommandResult::error(format!("Failed to export: {e}")),
     }
 }
@@ -390,17 +407,13 @@ mod tests {
         let mut app = create_test_app_with_tmpdir(&tmpdir);
         let result = export(&mut app, None);
         assert!(result.message.is_some());
-        // Should create file with timestamp name in current dir
-        let entries: Vec<_> = std::fs::read_dir(".")
+        // Should create file with timestamp name in the workspace.
+        let entries: Vec<_> = std::fs::read_dir(tmpdir.path())
             .unwrap()
             .filter_map(|e| e.ok())
             .filter(|e| e.file_name().to_string_lossy().starts_with("chat_export_"))
             .collect();
-        // Clean up
-        for entry in &entries {
-            let _ = std::fs::remove_file(entry.path());
-        }
-        assert!(!entries.is_empty() || result.message.unwrap().contains("Exported to"));
+        assert!(!entries.is_empty());
     }
 
     #[test]

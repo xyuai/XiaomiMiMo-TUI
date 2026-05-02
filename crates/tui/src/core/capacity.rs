@@ -480,10 +480,13 @@ pub fn decide_policy(
 
 fn normalize_model_prior_key(model: &str) -> &str {
     let lower = model.to_ascii_lowercase();
-    if lower.contains("mimo-v2.5-pro") || lower.contains("mimo-v2-pro") || lower.contains("mimo-pro") {
-        "xiaomimimo_v4_pro"
-    } else if lower.contains("mimo-v2-flash") || lower.contains("mimo-flash") {
+    if lower.contains("flash") {
         "xiaomimimo_v4_flash"
+    } else if lower.contains("mimo-v2.5-pro")
+        || lower.contains("mimo-v2-pro")
+        || lower.contains("mimo-pro")
+    {
+        "xiaomimimo_v4_pro"
     } else if lower.contains("mimo-v2.5") || lower.contains("mimo-v2-omni") {
         "xiaomimimo_v4_pro"
     } else if lower.contains("reasoner") || lower.contains("r1") {

@@ -40,13 +40,13 @@ fn resolve_attachment_path(raw_path: &str, workspace: &Path) -> PathBuf {
 
 fn expand_home(path: &str) -> PathBuf {
     if path == "~" {
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home);
+        if let Some(home) = dirs::home_dir() {
+            return home;
         }
     } else if let Some(rest) = path.strip_prefix("~/")
-        && let Some(home) = std::env::var_os("HOME")
+        && let Some(home) = dirs::home_dir()
     {
-        return PathBuf::from(home).join(rest);
+        return home.join(rest);
     }
     PathBuf::from(path)
 }
