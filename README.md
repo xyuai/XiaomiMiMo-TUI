@@ -93,7 +93,7 @@ XIAOMIMIMO_MODEL=mimo-v2.5-pro
 
 ## 发布版本
 
-当前版本：`0.5.3`
+当前版本：`0.5.4`
 
 Windows x64 Release 资产：
 
@@ -119,7 +119,7 @@ Windows x64 Release 资产：
 
 ## English
 
-XiaomiMiMo-TUI is a terminal user interface client adapted for Xiaomi MiMo. It provides a keyboard-first chat workflow, configuration management, session persistence, and tool-oriented terminal usage for Xiaomi MiMo-compatible OpenAI-style APIs.
+XiaomiMiMo-TUI is a terminal user interface and CLI client adapted for Xiaomi MiMo. It provides a keyboard-first chat workflow, speech synthesis via MiMo-V2.5-TTS, configuration management, session persistence, and tool-oriented terminal usage for Xiaomi MiMo-compatible OpenAI-style APIs.
 
 This project was originally adapted from [deepseektui](https://github.com/Hmbown/DeepSeek-TUI) v0.8.2 under the MIT License.
 

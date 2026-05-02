@@ -76,8 +76,8 @@ use crate::tui::history::{summarize_tool_args, summarize_tool_output};
     name = "xiaomimimo",
     author,
     version,
-    about = "XiaomiMiMo TUI/CLI for XiaomiMiMo models",
-    long_about = "Terminal-native TUI and CLI for XiaomiMiMo models.\n\nRun 'xiaomimimo' to start.\n\nNot affiliated with XiaomiMiMo Inc."
+    about = "XiaomiMiMo TUI/CLI for chat and MiMo-V2.5-TTS speech synthesis",
+    long_about = "Terminal-native TUI and CLI for XiaomiMiMo chat models and MiMo-V2.5-TTS speech synthesis.\n\nRun 'xiaomimimo' to start the TUI, or 'xiaomimimo speech' / 'xiaomimimo tts' to generate audio.\n\nNot affiliated with XiaomiMiMo Inc."
 )]
 struct Cli {
     /// Subcommand to run

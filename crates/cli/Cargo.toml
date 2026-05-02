@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Codex-style CLI facade for XiaomiMiMo workspace architecture"
+description = "CLI facade for XiaomiMiMo chat, workspace flows, and speech synthesis"
 
 [[bin]]
 name = "xiaomimimo"
