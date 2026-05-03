@@ -233,10 +233,10 @@ fn right_click_menu_includes_selection_and_clicked_cell_actions() {
         .map(|entry| entry.label.as_str())
         .collect::<Vec<_>>();
 
-    assert!(labels.contains(&"Copy selection"));
-    assert!(labels.contains(&"Open selection"));
-    assert!(labels.contains(&"Open details"));
-    assert!(labels.contains(&"Paste"));
+    assert!(labels.contains(&"\u{590d}\u{5236}\u{9009}\u{533a}"));
+    assert!(labels.contains(&"\u{6253}\u{5f00}\u{9009}\u{533a}"));
+    assert!(labels.contains(&"\u{6253}\u{5f00}\u{8be6}\u{60c5}"));
+    assert!(labels.contains(&"\u{7c98}\u{8d34}"));
 }
 
 #[test]
