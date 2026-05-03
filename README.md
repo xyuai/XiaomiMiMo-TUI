@@ -112,7 +112,7 @@ XIAOMIMIMO_MODEL=mimo-v2.5-pro
 
 ## 发布版本
 
-当前版本：`0.6.0`
+当前版本：`0.6.1`
 
 Windows x64 Release 资产：
 

@@ -7,5 +7,5 @@ repository.workspace = true
 description = "Model/provider registry and fallback strategy for XiaomiMiMo workspace architecture"
 
 [dependencies]
-xiaomimimo-config = { path = "../config", version = "0.6.0" }
+xiaomimimo-config = { path = "../config", version = "0.6.1" }
 serde.workspace = true
