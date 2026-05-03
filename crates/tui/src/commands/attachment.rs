@@ -7,25 +7,30 @@ use crate::tui::app::App;
 
 pub fn attach(app: &mut App, arg: Option<&str>) -> CommandResult {
     let Some(raw_path) = arg.map(str::trim).filter(|value| !value.is_empty()) else {
-        return CommandResult::error("Usage: /attach <image-or-video-path>");
+        return CommandResult::error("用法：/attach <image-or-video-path>");
     };
 
     let path = resolve_attachment_path(raw_path, &app.workspace);
     let Ok(path) = path.canonicalize() else {
-        return CommandResult::error(format!("Attachment not found: {}", path.display()));
+        return CommandResult::error(format!("附件不存在：{}", path.display()));
     };
     if !path.is_file() {
-        return CommandResult::error(format!("Attachment is not a file: {}", path.display()));
+        return CommandResult::error(format!("附件不是文件：{}", path.display()));
     }
 
     let Some(kind) = media_kind(&path) else {
         return CommandResult::error(
-            "Unsupported attachment type. /attach is for image/video paths; use @path for text files or directories.",
+            "不支持的附件类型。/attach 仅用于图片/视频路径；文本文件或目录请使用 @path。",
         );
     };
 
     app.insert_media_attachment(kind, &path, None);
-    CommandResult::message(format!("Attached {kind}: {}", path.display()))
+    let kind_label = match kind {
+        "image" => "图片",
+        "video" => "视频",
+        other => other,
+    };
+    CommandResult::message(format!("已附加{kind_label}：{}", path.display()))
 }
 
 fn resolve_attachment_path(raw_path: &str, workspace: &Path) -> PathBuf {
@@ -101,7 +106,7 @@ mod tests {
 
         let result = attach(&mut app, Some("photo.png"));
 
-        assert!(result.message.expect("message").contains("Attached image"));
+        assert!(result.message.expect("message").contains("已附加图片"));
         assert!(app.input.contains("[Attached image:"));
         let canonical_path = image_path.canonicalize().expect("canonical image path");
         assert!(app.input.contains(&canonical_path.display().to_string()));
@@ -119,7 +124,7 @@ mod tests {
             result
                 .message
                 .expect("message")
-                .contains("Unsupported attachment type")
+                .contains("不支持的附件类型")
         );
         assert!(app.input.is_empty());
     }

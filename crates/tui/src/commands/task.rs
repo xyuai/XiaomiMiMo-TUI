@@ -17,7 +17,7 @@ pub fn task(_app: &mut App, args: Option<&str>) -> CommandResult {
     match action.as_str() {
         "add" => {
             let Some(prompt) = remainder else {
-                return CommandResult::error("Usage: /task add <prompt>");
+                return CommandResult::error("用法：/task add <prompt>");
             };
             CommandResult::action(AppAction::TaskAdd {
                 prompt: prompt.to_string(),
@@ -26,17 +26,17 @@ pub fn task(_app: &mut App, args: Option<&str>) -> CommandResult {
         "list" => CommandResult::action(AppAction::TaskList),
         "show" => {
             let Some(id) = remainder else {
-                return CommandResult::error("Usage: /task show <id>");
+                return CommandResult::error("用法：/task show <id>");
             };
             CommandResult::action(AppAction::TaskShow { id: id.to_string() })
         }
         "cancel" | "stop" => {
             let Some(id) = remainder else {
-                return CommandResult::error("Usage: /task cancel <id>");
+                return CommandResult::error("用法：/task cancel <id>");
             };
             CommandResult::action(AppAction::TaskCancel { id: id.to_string() })
         }
-        _ => CommandResult::error("Usage: /task [add <prompt>|list|show <id>|cancel <id>]"),
+        _ => CommandResult::error("用法：/task [add <prompt>|list|show <id>|cancel <id>]"),
     }
 }
 

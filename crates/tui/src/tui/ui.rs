@@ -2652,7 +2652,7 @@ async fn dispatch_user_message(
     });
     maybe_warn_context_pressure(app);
     if should_auto_compact_before_send(app) {
-        app.status_message = Some("Context critical; compacting before send...".to_string());
+        app.status_message = Some("上下文严重不足，发送前正在压缩...".to_string());
         let _ = engine_handle.send(Op::CompactContext).await;
     }
     app.last_prompt_tokens = None;
@@ -2917,7 +2917,7 @@ fn open_context_inspector(app: &mut App) {
         .unwrap_or(80);
     let content = build_context_inspector_text(app);
     app.view_stack.push(PagerView::from_text(
-        "Context inspector",
+        "上下文检查器",
         &content,
         width.saturating_sub(2),
     ));
@@ -3282,7 +3282,7 @@ async fn apply_command_result(
                 open_context_inspector(app);
             }
             AppAction::CompactContext => {
-                app.status_message = Some("Compacting context...".to_string());
+                app.status_message = Some("正在压缩上下文...".to_string());
                 let _ = engine_handle.send(Op::CompactContext).await;
             }
             AppAction::TaskAdd { prompt } => {
@@ -5591,14 +5591,14 @@ fn maybe_warn_context_pressure(app: &mut App) {
     }
 
     let recommendation = if app.auto_compact {
-        "Auto-compaction is enabled."
+        "已启用自动压缩。"
     } else {
-        "Consider /compact or /clear."
+        "可考虑运行 /compact 或 /clear。"
     };
 
     if percent >= CONTEXT_CRITICAL_THRESHOLD_PERCENT {
         app.status_message = Some(format!(
-            "Context critical: {:.0}% ({used}/{max} tokens). {recommendation}",
+            "上下文严重：{:.0}%（{used}/{max} tokens）。{recommendation}",
             percent
         ));
         return;
@@ -5606,7 +5606,7 @@ fn maybe_warn_context_pressure(app: &mut App) {
 
     if app.status_message.is_none() {
         app.status_message = Some(format!(
-            "Context high: {:.0}% ({used}/{max} tokens). {recommendation}",
+            "上下文偏高：{:.0}%（{used}/{max} tokens）。{recommendation}",
             percent
         ));
     }
@@ -5792,17 +5792,17 @@ fn build_context_menu_entries(app: &App, mouse: MouseEvent) -> Vec<ContextMenuEn
 
     if selection_has_content(app) {
         entries.push(ContextMenuEntry {
-            label: "Copy selection".to_string(),
-            description: "write selected transcript text".to_string(),
+            label: "复制选区".to_string(),
+            description: "写入选中的转录文本".to_string(),
             action: ContextMenuAction::CopySelection,
         });
         entries.push(ContextMenuEntry {
-            label: "Open selection".to_string(),
-            description: "show selected text in pager".to_string(),
+            label: "打开选区".to_string(),
+            description: "在分页器中显示选中文本".to_string(),
             action: ContextMenuAction::OpenSelection,
         });
         entries.push(ContextMenuEntry {
-            label: "Clear selection".to_string(),
+            label: "清除选区".to_string(),
             description: String::new(),
             action: ContextMenuAction::ClearSelection,
         });
@@ -5811,37 +5811,37 @@ fn build_context_menu_entries(app: &App, mouse: MouseEvent) -> Vec<ContextMenuEn
     if let Some(cell_index) = transcript_cell_index_from_mouse(app, mouse) {
         let target = detail_target_label(app, cell_index)
             .map(|label| truncate_line_to_width(&label, 28))
-            .unwrap_or_else(|| "message".to_string());
+            .unwrap_or_else(|| "消息".to_string());
         entries.push(ContextMenuEntry {
-            label: "Open details".to_string(),
+            label: "打开详情".to_string(),
             description: target,
             action: ContextMenuAction::OpenDetails { cell_index },
         });
         entries.push(ContextMenuEntry {
-            label: "Copy message".to_string(),
-            description: "write clicked transcript cell".to_string(),
+            label: "复制消息".to_string(),
+            description: "写入点击的转录单元".to_string(),
             action: ContextMenuAction::CopyCell { cell_index },
         });
     }
 
     entries.push(ContextMenuEntry {
-        label: "Paste".to_string(),
-        description: "insert clipboard into composer".to_string(),
+        label: "粘贴".to_string(),
+        description: "将剪贴板插入输入框".to_string(),
         action: ContextMenuAction::Paste,
     });
     entries.push(ContextMenuEntry {
-        label: "Command palette".to_string(),
-        description: "commands, skills, and tools".to_string(),
+        label: "命令面板".to_string(),
+        description: "指令、技能和工具".to_string(),
         action: ContextMenuAction::OpenCommandPalette,
     });
     entries.push(ContextMenuEntry {
-        label: "Context inspector".to_string(),
-        description: "active context and cache hints".to_string(),
+        label: "上下文检查器".to_string(),
+        description: "当前上下文和缓存提示".to_string(),
         action: ContextMenuAction::OpenContextInspector,
     });
     entries.push(ContextMenuEntry {
-        label: "Help".to_string(),
-        description: "keybindings and commands".to_string(),
+        label: "帮助".to_string(),
+        description: "快捷键和指令".to_string(),
         action: ContextMenuAction::OpenHelp,
     });
 

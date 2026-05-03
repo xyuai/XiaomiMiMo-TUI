@@ -68,7 +68,7 @@ impl CommandResult {
     /// Create an error message result
     pub fn error(msg: impl Into<String>) -> Self {
         Self {
-            message: Some(format!("Error: {}", msg.into())),
+            message: Some(format!("错误：{}", msg.into())),
             action: None,
         }
     }
@@ -100,7 +100,7 @@ impl CommandInfo {
         if self.aliases.is_empty() {
             self.description.to_string()
         } else {
-            format!("{}  aliases: {}", self.description, self.aliases.join(", "))
+            format!("{}  别名：{}", self.description, self.aliases.join(", "))
         }
     }
 }
@@ -111,283 +111,283 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         name: "help",
         aliases: &["?"],
-        description: "Show help information",
+        description: "显示帮助信息",
         usage: "/help [command]",
     },
     CommandInfo {
         name: "clear",
         aliases: &[],
-        description: "Clear conversation history",
+        description: "清空对话历史",
         usage: "/clear",
     },
     CommandInfo {
         name: "exit",
         aliases: &["quit", "q"],
-        description: "Exit the application",
+        description: "退出应用",
         usage: "/exit",
     },
     CommandInfo {
         name: "model",
         aliases: &[],
-        description: "Switch or view current model",
+        description: "切换或查看当前模型",
         usage: "/model [name]",
     },
     CommandInfo {
         name: "models",
         aliases: &[],
-        description: "List available models from API",
+        description: "从 API 获取可用模型列表",
         usage: "/models",
     },
     CommandInfo {
         name: "provider",
         aliases: &[],
-        description: "Switch or view the active LLM backend (xiaomimimo | nvidia-nim)",
+        description: "切换或查看当前 LLM 后端（xiaomimimo | nvidia-nim）",
         usage: "/provider [name]",
     },
     CommandInfo {
         name: "queue",
         aliases: &["queued"],
-        description: "View or edit queued messages",
+        description: "查看或编辑排队消息",
         usage: "/queue [list|edit <n>|drop <n>|clear]",
     },
     CommandInfo {
         name: "subagents",
         aliases: &["agents"],
-        description: "List sub-agent status",
+        description: "查看子代理状态",
         usage: "/subagents",
     },
     CommandInfo {
         name: "links",
         aliases: &["dashboard", "api"],
-        description: "Show XiaomiMiMo dashboard and docs links",
+        description: "显示 XiaomiMiMo 控制台和文档链接",
         usage: "/links",
     },
     CommandInfo {
         name: "home",
         aliases: &["stats", "overview"],
-        description: "Show home dashboard with stats and quick actions",
+        description: "显示包含统计和快捷操作的首页",
         usage: "/home",
     },
     CommandInfo {
         name: "note",
         aliases: &[],
-        description: "Append note to persistent notes file (.xiaomimimo/notes.md)",
+        description: "把备注追加到持久备注文件（.xiaomimimo/notes.md）",
         usage: "/note <text>",
     },
     CommandInfo {
         name: "attach",
         aliases: &["image", "media"],
-        description: "Attach image/video media; use @path for text files or directories",
+        description: "附加图片/视频媒体；文本文件或目录请用 @path",
         usage: "/attach <path>",
     },
     CommandInfo {
         name: "task",
         aliases: &["tasks"],
-        description: "Manage background tasks",
+        description: "管理后台任务",
         usage: "/task [add <prompt>|list|show <id>|cancel <id>]",
     },
     CommandInfo {
         name: "jobs",
         aliases: &["job"],
-        description: "Inspect and control background shell jobs",
+        description: "查看和控制后台 Shell 作业",
         usage: "/jobs [list|show <id>|poll <id>|wait <id>|stdin <id> <input>|cancel <id>]",
     },
     CommandInfo {
         name: "mcp",
         aliases: &[],
-        description: "Open or manage MCP servers",
+        description: "打开或管理 MCP 服务器",
         usage: "/mcp [init|add stdio <name> <command> [args...]|add http <name> <url>|enable <name>|disable <name>|remove <name>|validate|reload]",
     },
     // Session commands
     CommandInfo {
         name: "save",
         aliases: &[],
-        description: "Save session to file",
+        description: "将会话保存到文件",
         usage: "/save [path]",
     },
     CommandInfo {
         name: "sessions",
         aliases: &["resume"],
-        description: "Open session picker",
+        description: "打开会话选择器",
         usage: "/sessions",
     },
     CommandInfo {
         name: "load",
         aliases: &[],
-        description: "Load session from file",
+        description: "从文件加载会话",
         usage: "/load [path]",
     },
     CommandInfo {
         name: "compact",
         aliases: &[],
-        description: "Trigger context compaction to free up space (legacy; v0.6.6 prefers cycle restart)",
+        description: "触发上下文压缩以释放空间（旧方式；v0.6.6 优先使用周期重启）",
         usage: "/compact",
     },
     CommandInfo {
         name: "context",
         aliases: &["ctx"],
-        description: "Open compact session context inspector",
+        description: "打开会话上下文检查器",
         usage: "/context",
     },
     CommandInfo {
         name: "cycles",
         aliases: &[],
-        description: "List checkpoint-restart cycle handoffs in this session",
+        description: "列出本会话中的检查点重启周期交接",
         usage: "/cycles",
     },
     CommandInfo {
         name: "cycle",
         aliases: &[],
-        description: "Show the carry-forward briefing for a specific cycle",
+        description: "显示指定周期的延续简报",
         usage: "/cycle <n>",
     },
     CommandInfo {
         name: "recall",
         aliases: &[],
-        description: "Search prior cycle archives (BM25 over message text)",
+        description: "搜索历史周期归档（基于消息文本的 BM25）",
         usage: "/recall <query>",
     },
     CommandInfo {
         name: "export",
         aliases: &[],
-        description: "Export conversation to markdown",
+        description: "将对话导出为 Markdown",
         usage: "/export [path]",
     },
     // Config commands
     CommandInfo {
         name: "config",
         aliases: &[],
-        description: "Open interactive configuration editor or update settings",
+        description: "打开交互式配置编辑器或更新设置",
         usage: "/config [key [value]|native]",
     },
     CommandInfo {
         name: "lsp",
         aliases: &[],
-        description: "Show or update LSP diagnostics startup setting",
+        description: "显示或更新 LSP 诊断启动设置",
         usage: "/lsp [status|on|off]",
     },
     CommandInfo {
         name: "profile",
         aliases: &[],
-        description: "Apply a named config profile to the current session",
+        description: "将命名配置档应用到当前会话",
         usage: "/profile <name>",
     },
     CommandInfo {
         name: "yolo",
         aliases: &[],
-        description: "Enable YOLO mode (shell + trust + auto-approve)",
+        description: "启用 YOLO 模式（Shell + 信任 + 自动批准）",
         usage: "/yolo",
     },
     CommandInfo {
         name: "agent",
         aliases: &[],
-        description: "Switch to agent mode",
+        description: "切换到 Agent 模式",
         usage: "/agent",
     },
     CommandInfo {
         name: "plan",
         aliases: &[],
-        description: "Switch to plan mode and review suggested implementation steps",
+        description: "切换到 Plan 模式并先查看建议实现步骤",
         usage: "/plan",
     },
     CommandInfo {
         name: "trust",
         aliases: &[],
-        description: "Manage workspace trust and per-path allowlist (`/trust add <path>`, `/trust list`, `/trust on|off`)",
+        description: "管理工作区信任和路径白名单（`/trust add <path>`、`/trust list`、`/trust on|off`）",
         usage: "/trust [on|off|add <path>|remove <path>|list]",
     },
     CommandInfo {
         name: "logout",
         aliases: &[],
-        description: "Clear API key and return to setup",
+        description: "清除 API key 并返回设置流程",
         usage: "/logout",
     },
     // Debug commands
     CommandInfo {
         name: "tokens",
         aliases: &[],
-        description: "Show token usage for session",
+        description: "显示会话 token 用量",
         usage: "/tokens",
     },
     CommandInfo {
         name: "cache",
         aliases: &[],
-        description: "Show prompt-cache telemetry for the latest turn",
+        description: "显示最近一轮 prompt 缓存遥测",
         usage: "/cache [status]",
     },
     CommandInfo {
         name: "system",
         aliases: &[],
-        description: "Show current system prompt",
+        description: "显示当前系统提示词",
         usage: "/system",
     },
     CommandInfo {
         name: "undo",
         aliases: &[],
-        description: "Remove last message pair",
+        description: "移除最后一组消息",
         usage: "/undo",
     },
     CommandInfo {
         name: "retry",
         aliases: &[],
-        description: "Retry the last request",
+        description: "重试上一条请求",
         usage: "/retry",
     },
     CommandInfo {
         name: "init",
         aliases: &[],
-        description: "Generate AGENTS.md for project",
+        description: "为项目生成 AGENTS.md",
         usage: "/init",
     },
     CommandInfo {
         name: "settings",
         aliases: &[],
-        description: "Show persistent settings",
+        description: "显示持久化设置",
         usage: "/settings",
     },
     CommandInfo {
         name: "statusline",
         aliases: &["status"],
-        description: "Configure which items appear in the footer",
+        description: "配置底部状态栏显示项",
         usage: "/statusline",
     },
     // Skills commands
     CommandInfo {
         name: "skills",
         aliases: &[],
-        description: "List local skills (or --remote to browse the curated registry)",
+        description: "列出本地技能（或用 --remote 浏览精选仓库）",
         usage: "/skills [--remote]",
     },
     CommandInfo {
         name: "skill",
         aliases: &[],
-        description: "Activate a skill, or install/update/uninstall/trust a community skill",
+        description: "激活技能，或安装/更新/卸载/信任社区技能",
         usage: "/skill <name|install <spec>|update <name>|uninstall <name>|trust <name>>",
     },
     CommandInfo {
         name: "review",
         aliases: &[],
-        description: "Run a structured code review on a file, diff, or PR",
+        description: "对文件、diff 或 PR 执行结构化代码审查",
         usage: "/review <target>",
     },
     CommandInfo {
         name: "restore",
         aliases: &[],
-        description: "Roll back the workspace to a prior pre/post-turn snapshot. With no arg, lists recent snapshots.",
+        description: "将工作区回滚到之前的回合前/后快照；不带参数时列出最近快照",
         usage: "/restore [N]",
     },
     // RLM command
     CommandInfo {
         name: "rlm",
         aliases: &["recursive"],
-        description: "Recursive Language Model (RLM) turn — store the prompt in a Python REPL and let the model write code to process it, with `llm_query()` / `sub_rlm()` for sub-LLM calls.",
+        description: "递归语言模型（RLM）回合：把 prompt 存入 Python REPL，让模型编写代码处理，并可通过 `llm_query()` / `sub_rlm()` 调用子模型。",
         usage: "/rlm <prompt>",
     },
     // Debug/cost command
     CommandInfo {
         name: "cost",
         aliases: &[],
-        description: "Show session token usage",
+        description: "显示会话 token 用量",
         usage: "/cost",
     },
 ];
@@ -503,19 +503,17 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
 
         // Legacy command migrations (kept out of registry/autocomplete intentionally).
         "set" => CommandResult::error(
-            "The /set command was retired. Use /config to edit settings and /settings to inspect current values.",
+            "/set 指令已停用。请用 /config 编辑设置，用 /settings 查看当前值。",
         ),
         "normal" => config::normal_mode(app),
-        "xiaomimimo" => CommandResult::error(
-            "The /xiaomimimo command was renamed. Use /links (aliases: /dashboard, /api).",
-        ),
+        "xiaomimimo" => {
+            CommandResult::error("/xiaomimimo 指令已改名。请用 /links（别名：/dashboard、/api）。")
+        }
 
         _ => {
             let suggestions = suggest_command_names(command, 3);
             if suggestions.is_empty() {
-                CommandResult::error(format!(
-                    "Unknown command: /{command}. Type /help for available commands."
-                ))
+                CommandResult::error(format!("未知指令：/{command}。输入 /help 查看可用指令。"))
             } else {
                 let list = suggestions
                     .into_iter()
@@ -523,7 +521,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
                     .collect::<Vec<_>>()
                     .join(", ");
                 CommandResult::error(format!(
-                    "Unknown command: /{command}. Did you mean: {list}? Type /help for available commands."
+                    "未知指令：/{command}。你是不是想输入：{list}？输入 /help 查看可用指令。"
                 ))
             }
         }
@@ -554,10 +552,9 @@ pub fn rlm(app: &mut App, arg: Option<&str>) -> CommandResult {
         Some(p) if !p.trim().is_empty() => p.trim().to_string(),
         _ => {
             return CommandResult::error(
-                "Usage: /rlm <prompt>\n\n\
-                 Process a prompt using a Recursive Language Model (RLM).\n\
-                 The prompt is stored in a REPL and the model writes code\n\
-                 to decompose and process it recursively."
+                "用法：/rlm <prompt>\n\n\
+                 使用递归语言模型（RLM）处理 prompt。\n\
+                 prompt 会存入 REPL，由模型编写代码进行递归拆解和处理。"
                     .to_string(),
             );
         }
@@ -566,8 +563,8 @@ pub fn rlm(app: &mut App, arg: Option<&str>) -> CommandResult {
     // Sanity-check: RLM is most useful for longer prompts.
     if prompt.len() < 50 {
         return CommandResult::message(
-            "Tip: RLM is designed for processing LONG prompts (>100 chars). \
-             For short queries, just type the message directly."
+            "提示：RLM 更适合处理较长 prompt（>100 字符）。\
+             短问题直接输入消息即可。"
                 .to_string(),
         );
     }
@@ -580,7 +577,7 @@ pub fn rlm(app: &mut App, arg: Option<&str>) -> CommandResult {
 
     CommandResult::with_message_and_action(
         format!(
-            "Starting RLM turn for {} chars of prompt using {} (child={}, depth={})...",
+            "正在启动 RLM 回合：prompt {} 个字符，模型 {}（子模型={}，深度={}）...",
             prompt.len(),
             model,
             child_model,
@@ -857,18 +854,18 @@ mod tests {
         let lsp = execute("/lsp status", &mut app)
             .message
             .expect("lsp status message");
-        assert!(lsp.contains("LSP diagnostics"));
+        assert!(lsp.contains("LSP 诊断"));
 
         app.last_prompt_tokens = Some(10);
         app.last_prompt_cache_hit_tokens = Some(7);
         app.last_prompt_cache_miss_tokens = Some(3);
         let cache = execute("/cache", &mut app).message.expect("cache message");
-        assert!(cache.contains("Prompt Cache"));
+        assert!(cache.contains("Prompt 缓存"));
 
         let profile = execute("/profile definitely-missing-profile", &mut app)
             .message
             .expect("profile error message");
-        assert!(profile.contains("Error:"));
+        assert!(profile.contains("错误："));
     }
 
     #[test]
@@ -889,7 +886,7 @@ mod tests {
         let set_msg = set_result
             .message
             .expect("legacy command should return an error message");
-        assert!(set_msg.contains("The /set command was retired"));
+        assert!(set_msg.contains("/set 指令已停用"));
         assert!(set_msg.contains("/config"));
         assert!(set_msg.contains("/settings"));
         assert!(set_result.action.is_none());
@@ -898,7 +895,7 @@ mod tests {
         let xiaomimimo_msg = xiaomimimo_result
             .message
             .expect("legacy command should return an error message");
-        assert!(xiaomimimo_msg.contains("The /xiaomimimo command was renamed"));
+        assert!(xiaomimimo_msg.contains("/xiaomimimo 指令已改名"));
         assert!(xiaomimimo_msg.contains("/links"));
         assert!(xiaomimimo_msg.contains("/dashboard"));
         assert!(xiaomimimo_msg.contains("/api"));
@@ -912,8 +909,8 @@ mod tests {
         let msg = result
             .message
             .expect("unknown command should return an error message");
-        assert!(msg.contains("Unknown command: /modle"));
-        assert!(msg.contains("Did you mean:"));
+        assert!(msg.contains("未知指令：/modle"));
+        assert!(msg.contains("你是不是想输入："));
         assert!(msg.contains("/model"));
     }
 
@@ -924,7 +921,7 @@ mod tests {
         let msg = result
             .message
             .expect("unknown command should return an error message");
-        assert!(msg.contains("Unknown command: /zzzzzz"));
-        assert!(msg.contains("Type /help for available commands."));
+        assert!(msg.contains("未知指令：/zzzzzz"));
+        assert!(msg.contains("输入 /help 查看可用指令。"));
     }
 }

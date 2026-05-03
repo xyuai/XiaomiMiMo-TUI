@@ -19,7 +19,7 @@ pub fn queue(app: &mut App, args: Option<&str>) -> CommandResult {
         "edit" => edit_queue(app, parts.next()),
         "drop" | "remove" | "rm" => drop_queue(app, parts.next()),
         "clear" => clear_queue(app),
-        _ => CommandResult::error("Usage: /queue [list|edit <n>|drop <n>|clear]"),
+        _ => CommandResult::error("用法：/queue [list|edit <n>|drop <n>|clear]"),
     }
 }
 
@@ -28,18 +28,18 @@ fn list_queue(app: &mut App) -> CommandResult {
     let queued = app.queued_message_count();
 
     if let Some(draft) = app.queued_draft.as_ref() {
-        lines.push("Editing queued message:".to_string());
+        lines.push("正在编辑排队消息：".to_string());
         lines.push(format!("- {}", truncate_preview(&draft.display)));
     }
 
     if queued == 0 {
         if lines.is_empty() {
-            return CommandResult::message("No queued messages");
+            return CommandResult::message("没有排队消息");
         }
         return CommandResult::message(lines.join("\n"));
     }
 
-    lines.push(format!("Queued messages ({queued}):"));
+    lines.push(format!("排队消息（{queued}）："));
     for (idx, message) in app.queued_messages.iter().enumerate() {
         lines.push(format!(
             "{}. {}",
@@ -48,16 +48,14 @@ fn list_queue(app: &mut App) -> CommandResult {
         ));
     }
 
-    lines.push("Tip: /queue edit <n> to edit, /queue drop <n> to remove".to_string());
+    lines.push("提示：使用 /queue edit <n> 编辑，/queue drop <n> 移除".to_string());
 
     CommandResult::message(lines.join("\n"))
 }
 
 fn edit_queue(app: &mut App, index: Option<&str>) -> CommandResult {
     if app.queued_draft.is_some() {
-        return CommandResult::error(
-            "Already editing a queued message. Send it or /queue clear to discard.",
-        );
+        return CommandResult::error("已有正在编辑的排队消息。发送它，或用 /queue clear 放弃。");
     }
     let index = match parse_index(index) {
         Ok(index) => index,
@@ -65,16 +63,16 @@ fn edit_queue(app: &mut App, index: Option<&str>) -> CommandResult {
     };
 
     let Some(message) = app.remove_queued_message(index) else {
-        return CommandResult::error("Queued message not found");
+        return CommandResult::error("未找到排队消息");
     };
 
     app.input = message.display.clone();
     app.cursor_position = app.input.len();
     app.queued_draft = Some(message);
-    app.status_message = Some(format!("Editing queued message {}", index + 1));
+    app.status_message = Some(format!("正在编辑第 {} 条排队消息", index + 1));
 
     CommandResult::message(format!(
-        "Editing queued message {} (press Enter to re-queue/send)",
+        "正在编辑第 {} 条排队消息（按 Enter 重新排队/发送）",
         index + 1
     ))
 }
@@ -86,10 +84,10 @@ fn drop_queue(app: &mut App, index: Option<&str>) -> CommandResult {
     };
 
     if app.remove_queued_message(index).is_none() {
-        return CommandResult::error("Queued message not found");
+        return CommandResult::error("未找到排队消息");
     }
 
-    CommandResult::message(format!("Dropped queued message {}", index + 1))
+    CommandResult::message(format!("已移除第 {} 条排队消息", index + 1))
 }
 
 fn clear_queue(app: &mut App) -> CommandResult {
@@ -97,21 +95,19 @@ fn clear_queue(app: &mut App) -> CommandResult {
     let had_draft = app.queued_draft.take().is_some();
     app.queued_messages.clear();
     if queued == 0 && !had_draft {
-        return CommandResult::message("Queue already empty");
+        return CommandResult::message("队列已经为空");
     }
 
-    CommandResult::message("Queue cleared")
+    CommandResult::message("队列已清空")
 }
 
 fn parse_index(input: Option<&str>) -> Result<usize, &'static str> {
     let Some(input) = input else {
-        return Err("Missing index. Usage: /queue edit <n> or /queue drop <n>");
+        return Err("缺少序号。用法：/queue edit <n> 或 /queue drop <n>");
     };
-    let raw = input
-        .parse::<usize>()
-        .map_err(|_| "Index must be a positive number")?;
+    let raw = input.parse::<usize>().map_err(|_| "序号必须是正数")?;
     if raw == 0 {
-        return Err("Index must be >= 1");
+        return Err("序号必须 >= 1");
     }
     Ok(raw - 1)
 }
@@ -165,7 +161,7 @@ mod tests {
         let result = queue(&mut app, None);
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("No queued messages"));
+        assert!(msg.contains("没有排队消息"));
     }
 
     #[test]
@@ -179,7 +175,7 @@ mod tests {
         let result = queue(&mut app, Some("list"));
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("Queued messages (2)"));
+        assert!(msg.contains("排队消息（2）"));
         assert!(msg.contains("1. First message"));
         assert!(msg.contains("2. Second message"));
     }
@@ -192,7 +188,7 @@ mod tests {
             .push_back(QueuedMessage::new("Test".to_string(), None));
         let result = queue(&mut app, Some("edit"));
         assert!(result.message.is_some());
-        assert!(result.message.unwrap().contains("Missing index"));
+        assert!(result.message.unwrap().contains("缺少序号"));
     }
 
     #[test]
@@ -201,12 +197,7 @@ mod tests {
         let mut app = create_test_app_with_tmpdir(&tmpdir);
         let result = queue(&mut app, Some("edit abc"));
         assert!(result.message.is_some());
-        assert!(
-            result
-                .message
-                .unwrap()
-                .contains("must be a positive number")
-        );
+        assert!(result.message.unwrap().contains("必须是正数"));
     }
 
     #[test]
@@ -215,7 +206,7 @@ mod tests {
         let mut app = create_test_app_with_tmpdir(&tmpdir);
         let result = queue(&mut app, Some("edit 1"));
         assert!(result.message.is_some());
-        assert!(result.message.unwrap().contains("not found"));
+        assert!(result.message.unwrap().contains("未找到"));
     }
 
     #[test]
@@ -231,7 +222,7 @@ mod tests {
         // Try to edit another
         let result = queue(&mut app, Some("edit 2"));
         assert!(result.message.is_some());
-        assert!(result.message.unwrap().contains("Already editing"));
+        assert!(result.message.unwrap().contains("已有正在编辑"));
     }
 
     #[test]
@@ -256,7 +247,7 @@ mod tests {
         let initial_count = app.queued_messages.len();
         let result = queue(&mut app, Some("drop 1"));
         assert!(result.message.is_some());
-        assert!(result.message.unwrap().contains("Dropped queued message"));
+        assert!(result.message.unwrap().contains("已移除"));
         assert_eq!(app.queued_messages.len(), initial_count - 1);
     }
 
@@ -270,7 +261,7 @@ mod tests {
             .push_back(QueuedMessage::new("Message 2".to_string(), None));
         let result = queue(&mut app, Some("clear"));
         assert!(result.message.is_some());
-        assert!(result.message.unwrap().contains("Queue cleared"));
+        assert!(result.message.unwrap().contains("队列已清空"));
         assert!(app.queued_messages.is_empty());
     }
 
@@ -280,7 +271,7 @@ mod tests {
         let mut app = create_test_app_with_tmpdir(&tmpdir);
         let result = queue(&mut app, Some("clear"));
         assert!(result.message.is_some());
-        assert!(result.message.unwrap().contains("Queue already empty"));
+        assert!(result.message.unwrap().contains("队列已经为空"));
     }
 
     #[test]

@@ -19,7 +19,7 @@ fn render_skill_warnings(registry: &SkillRegistry) -> String {
     }
 
     let mut out = String::new();
-    let _ = writeln!(out, "\nWarnings ({}):", registry.warnings().len());
+    let _ = writeln!(out, "\n警告（{}）：", registry.warnings().len());
     for warning in registry.warnings() {
         let _ = writeln!(out, "  - {warning}");
     }
@@ -35,7 +35,7 @@ pub fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
             return list_remote_skills(app);
         }
         if !trimmed.is_empty() {
-            return CommandResult::error("Usage: /skills [--remote]");
+            return CommandResult::error("用法：/skills [--remote]");
         }
     }
     let skills_dir = app.skills_dir.clone();
@@ -44,31 +44,31 @@ pub fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
 
     if registry.is_empty() {
         let msg = format!(
-            "No skills found.\n\n\
-             Skills location: {}\n\n\
-             To add skills, create directories with SKILL.md files:\n  \
+            "未找到技能。\n\n\
+             技能位置：{}\n\n\
+             添加技能时，请创建包含 SKILL.md 的目录：\n  \
              {}/my-skill/SKILL.md\n\n\
-             Format:\n  \
+             格式：\n  \
              ---\n  \
              name: my-skill\n  \
-             description: What this skill does\n  \
+             description: 这个技能的用途\n  \
              allowed-tools: read_file, list_dir\n  \
              ---\n\n  \
-             <instructions here>{warnings}",
+             <在这里写说明>{warnings}",
             skills_dir.display(),
             skills_dir.display()
         );
         return CommandResult::message(msg);
     }
 
-    let mut output = format!("Available skills ({}):\n", registry.len());
+    let mut output = format!("可用技能（{}）：\n", registry.len());
     output.push_str("─────────────────────────────\n");
     for skill in registry.list() {
         let _ = writeln!(output, "  /{} - {}", skill.name, skill.description);
     }
     let _ = write!(
         output,
-        "\nUse /skill <name> to run a skill\nSkills location: {}{}",
+        "\n使用 /skill <name> 运行技能\n技能位置：{}{}",
         skills_dir.display(),
         warnings
     );
@@ -83,7 +83,7 @@ pub fn run_skill(app: &mut App, name: Option<&str>) -> CommandResult {
         Some(n) => n.trim(),
         None => {
             return CommandResult::error(
-                "Usage: /skill <name>\n\nSubcommands:\n  /skill install <github:owner/repo|https://…|<registry-name>>\n  /skill update <name>\n  /skill uninstall <name>\n  /skill trust <name>",
+                "用法：/skill <name>\n\n子命令：\n  /skill install <github:owner/repo|https://…|<registry-name>>\n  /skill update <name>\n  /skill uninstall <name>\n  /skill trust <name>",
             );
         }
     };
@@ -118,13 +118,13 @@ fn activate_skill(app: &mut App, name: &str) -> CommandResult {
         );
 
         app.add_message(HistoryCell::System {
-            content: format!("Activated skill: {}\n\n{}", skill.name, skill.description),
+            content: format!("已激活技能：{}\n\n{}", skill.name, skill.description),
         });
 
         app.active_skill = Some(instruction);
 
         CommandResult::message(format!(
-            "Skill '{}' activated.\n\nDescription: {}\n\nType your request and the skill instructions will be applied.",
+            "技能 '{}' 已激活。\n\n描述：{}\n\n输入你的请求后将应用该技能说明。",
             skill.name, skill.description
         ))
     } else {
@@ -133,11 +133,11 @@ fn activate_skill(app: &mut App, name: &str) -> CommandResult {
 
         if available.is_empty() {
             CommandResult::error(format!(
-                "Skill '{name}' not found. No skills installed.\n\nUse /skills to see how to add skills.{warnings}"
+                "未找到技能 '{name}'。尚未安装任何技能。\n\n使用 /skills 查看如何添加技能。{warnings}"
             ))
         } else {
             CommandResult::error(format!(
-                "Skill '{}' not found.\n\nAvailable skills: {}{}",
+                "未找到技能 '{}'。\n\n可用技能：{}{}",
                 name,
                 available.join(", "),
                 warnings
@@ -151,12 +151,12 @@ fn activate_skill(app: &mut App, name: &str) -> CommandResult {
 fn install_skill(app: &mut App, spec: &str) -> CommandResult {
     if spec.is_empty() {
         return CommandResult::error(
-            "Usage: /skill install <github:owner/repo|https://…|<registry-name>>",
+            "用法：/skill install <github:owner/repo|https://…|<registry-name>>",
         );
     }
     let source = match InstallSource::parse(spec) {
         Ok(s) => s,
-        Err(err) => return CommandResult::error(format!("Invalid install source: {err}")),
+        Err(err) => return CommandResult::error(format!("安装来源无效：{err}")),
     };
     let skills_dir = app.skills_dir.clone();
     let (network, max_size, registry_url) = installer_settings(app);
@@ -177,8 +177,8 @@ fn install_skill(app: &mut App, spec: &str) -> CommandResult {
         Ok(InstallOutcome::Installed(installed)) => {
             let path_str = path_or_default(&installed.path);
             CommandResult::message(format!(
-                "Installed skill '{}' from {}.\nLocation: {}\n\nRun /skills to see it in the list.",
-                installed.name, spec, path_str
+                "已从 {} 安装技能 '{}'。\n位置：{}\n\n运行 /skills 可在列表中查看。",
+                spec, installed.name, path_str
             ))
         }
         Ok(InstallOutcome::NeedsApproval(host)) => {
@@ -187,7 +187,7 @@ fn install_skill(app: &mut App, spec: &str) -> CommandResult {
         Ok(InstallOutcome::NetworkDenied(host)) => {
             CommandResult::error(network_denied_message(&host))
         }
-        Err(err) => CommandResult::error(format!("Install failed: {err:#}")),
+        Err(err) => CommandResult::error(format!("安装失败：{err:#}")),
     }
 }
 
@@ -195,7 +195,7 @@ fn install_skill(app: &mut App, spec: &str) -> CommandResult {
 
 fn update_skill(app: &mut App, name: &str) -> CommandResult {
     if name.is_empty() {
-        return CommandResult::error("Usage: /skill update <name>");
+        return CommandResult::error("用法：/skill update <name>");
     }
     let skills_dir = app.skills_dir.clone();
     let (network, max_size, registry_url) = installer_settings(app);
@@ -207,10 +207,10 @@ fn update_skill(app: &mut App, name: &str) -> CommandResult {
 
     match outcome {
         Ok(UpdateResult::NoChange) => {
-            CommandResult::message(format!("Skill '{name}': no upstream change."))
+            CommandResult::message(format!("技能 '{name}'：没有可更新内容。"))
         }
         Ok(UpdateResult::Updated(installed)) => CommandResult::message(format!(
-            "Skill '{}' updated. Location: {}",
+            "技能 '{}' 已更新。位置：{}",
             installed.name,
             path_or_default(&installed.path)
         )),
@@ -220,7 +220,7 @@ fn update_skill(app: &mut App, name: &str) -> CommandResult {
         Ok(UpdateResult::NetworkDenied(host)) => {
             CommandResult::error(network_denied_message(&host))
         }
-        Err(err) => CommandResult::error(format!("Update failed: {err:#}")),
+        Err(err) => CommandResult::error(format!("更新失败：{err:#}")),
     }
 }
 
@@ -228,11 +228,11 @@ fn update_skill(app: &mut App, name: &str) -> CommandResult {
 
 fn uninstall_skill(app: &mut App, name: &str) -> CommandResult {
     if name.is_empty() {
-        return CommandResult::error("Usage: /skill uninstall <name>");
+        return CommandResult::error("用法：/skill uninstall <name>");
     }
     match install::uninstall(name, &app.skills_dir) {
-        Ok(()) => CommandResult::message(format!("Removed skill '{name}'.")),
-        Err(err) => CommandResult::error(format!("Uninstall failed: {err:#}")),
+        Ok(()) => CommandResult::message(format!("已移除技能 '{name}'。")),
+        Err(err) => CommandResult::error(format!("卸载失败：{err:#}")),
     }
 }
 
@@ -240,13 +240,13 @@ fn uninstall_skill(app: &mut App, name: &str) -> CommandResult {
 
 fn trust_skill(app: &mut App, name: &str) -> CommandResult {
     if name.is_empty() {
-        return CommandResult::error("Usage: /skill trust <name>");
+        return CommandResult::error("用法：/skill trust <name>");
     }
     match install::trust(name, &app.skills_dir) {
         Ok(()) => CommandResult::message(format!(
-            "Marked skill '{name}' as trusted. Tools that consult the .trusted marker may now invoke its scripts/."
+            "已将技能 '{name}' 标记为受信任。会检查 .trusted 标记的工具现在可以调用它的 scripts/。"
         )),
-        Err(err) => CommandResult::error(format!("Trust failed: {err:#}")),
+        Err(err) => CommandResult::error(format!("信任操作失败：{err:#}")),
     }
 }
 
@@ -259,19 +259,19 @@ pub fn list_remote_skills(app: &mut App) -> CommandResult {
     match registry {
         Ok(RegistryFetchResult::Loaded(doc)) => {
             if doc.skills.is_empty() {
-                return CommandResult::message("Registry is empty.");
+                return CommandResult::message("仓库为空。");
             }
-            let mut out = format!("Available remote skills ({}):\n", doc.skills.len());
+            let mut out = format!("可用远程技能（{}）：\n", doc.skills.len());
             out.push_str("─────────────────────────────\n");
             for (name, entry) in &doc.skills {
                 let _ = writeln!(
                     out,
-                    "  {name} — {} (source: {})",
+                    "  {name} — {}（来源：{}）",
                     entry.description.clone().unwrap_or_default(),
                     entry.source
                 );
             }
-            let _ = write!(out, "\nInstall with: /skill install <name>");
+            let _ = write!(out, "\n安装命令：/skill install <name>");
             CommandResult::message(out)
         }
         Ok(RegistryFetchResult::NeedsApproval(host)) => {
@@ -280,7 +280,7 @@ pub fn list_remote_skills(app: &mut App) -> CommandResult {
         Ok(RegistryFetchResult::Denied(host)) => {
             CommandResult::error(network_denied_message(&host))
         }
-        Err(err) => CommandResult::error(format!("Failed to fetch registry: {err:#}")),
+        Err(err) => CommandResult::error(format!("获取仓库失败：{err:#}")),
     }
 }
 
@@ -342,15 +342,15 @@ fn path_or_default(path: &std::path::Path) -> String {
 
 fn needs_approval_message(host: &str) -> String {
     format!(
-        "Network policy requires approval for {host}.\n\
-         Add it to your allow list with `/network allow {host}` (or set [network].default = \"allow\" in ~/.xiaomimimo/config.toml), then retry."
+        "网络策略要求先批准 {host}。\n\
+         请使用 `/network allow {host}` 将其加入允许列表（或在 ~/.xiaomimimo/config.toml 中设置 [network].default = \"allow\"），然后重试。"
     )
 }
 
 fn network_denied_message(host: &str) -> String {
     format!(
-        "Network policy denied access to {host}.\n\
-         Remove the deny entry from ~/.xiaomimimo/config.toml under [network] or contact your administrator."
+        "网络策略已拒绝访问 {host}。\n\
+         请从 ~/.xiaomimimo/config.toml 的 [network] 中移除 deny 条目，或联系管理员。"
     )
 }
 
@@ -397,8 +397,8 @@ mod tests {
         let result = list_skills(&mut app, None);
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("No skills found"));
-        assert!(msg.contains("Skills location:"));
+        assert!(msg.contains("未找到技能"));
+        assert!(msg.contains("技能位置："));
     }
 
     #[test]
@@ -413,7 +413,7 @@ mod tests {
         let result = list_skills(&mut app, None);
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("Available skills"));
+        assert!(msg.contains("可用技能"));
         assert!(msg.contains("/test-skill"));
     }
 
@@ -442,7 +442,7 @@ mod tests {
         let mut app = create_test_app_with_tmpdir(&tmpdir);
         let result = run_skill(&mut app, None);
         assert!(result.message.is_some());
-        assert!(result.message.unwrap().contains("Usage: /skill"));
+        assert!(result.message.unwrap().contains("用法：/skill"));
     }
 
     #[test]
@@ -452,7 +452,7 @@ mod tests {
         let result = run_skill(&mut app, Some("nonexistent"));
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("not found"));
+        assert!(msg.contains("未找到技能"));
     }
 
     #[test]
@@ -467,7 +467,7 @@ mod tests {
         let result = run_skill(&mut app, Some("test-skill"));
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("Skill 'test-skill' activated"));
+        assert!(msg.contains("技能 'test-skill' 已激活"));
         assert!(msg.contains("A test skill"));
         assert!(app.active_skill.is_some());
         assert!(!app.history.is_empty());

@@ -19,22 +19,19 @@ pub fn restore(app: &mut App, arg: Option<&str>) -> CommandResult {
     let repo = match SnapshotRepo::open_or_init(&workspace) {
         Ok(r) => r,
         Err(e) => {
-            return CommandResult::error(format!(
-                "Snapshot repo unavailable for {}: {e}",
-                workspace.display(),
-            ));
+            return CommandResult::error(
+                format!("快照仓库不可用（{}）：{e}", workspace.display(),),
+            );
         }
     };
 
     let snapshots = match repo.list(LIST_LIMIT) {
         Ok(s) => s,
-        Err(e) => return CommandResult::error(format!("Failed to list snapshots: {e}")),
+        Err(e) => return CommandResult::error(format!("列出快照失败：{e}")),
     };
 
     if snapshots.is_empty() {
-        return CommandResult::message(
-            "No snapshots yet. Send a message to create the first pre-turn snapshot.",
-        );
+        return CommandResult::message("还没有快照。发送一条消息后会创建第一个回合前快照。");
     }
 
     let Some(arg) = arg.map(str::trim).filter(|s| !s.is_empty()) else {
@@ -45,14 +42,14 @@ pub fn restore(app: &mut App, arg: Option<&str>) -> CommandResult {
         Ok(n) if n >= 1 => n,
         _ => {
             return CommandResult::error(format!(
-                "Usage: /restore <N>  (N is 1-based; got '{arg}')",
+                "用法：/restore <N>  （N 从 1 开始；收到 '{arg}'）",
             ));
         }
     };
 
     if n > snapshots.len() {
         return CommandResult::error(format!(
-            "Only {} snapshot(s) available; asked for #{n}.",
+            "当前只有 {} 个快照；请求的是 #{n}。",
             snapshots.len(),
         ));
     }
@@ -63,26 +60,26 @@ pub fn restore(app: &mut App, arg: Option<&str>) -> CommandResult {
     // Agent mode get a clear message explaining how to proceed.
     if !(app.yolo || app.trust_mode) {
         return CommandResult::message(format!(
-            "Refusing to restore snapshot #{n} ('{}') outside trusted mode.\n\
-             Run `/trust on` or `/yolo` first, then re-run `/restore {n}`.",
+            "当前不在信任模式，拒绝恢复快照 #{n}（'{}'）。\n\
+             请先运行 `/trust on` 或 `/yolo`，然后重新运行 `/restore {n}`。",
             snapshots[n - 1].label,
         ));
     }
 
     let target = &snapshots[n - 1];
     if let Err(e) = repo.restore(&target.id) {
-        return CommandResult::error(format!("Restore failed: {e}"));
+        return CommandResult::error(format!("恢复失败：{e}"));
     }
 
     CommandResult::message(format!(
-        "Restored snapshot #{n} ('{}', {}). Workspace files have been reverted; conversation history is unchanged.",
+        "已恢复快照 #{n}（'{}'，{}）。工作区文件已回滚；对话历史保持不变。",
         target.label,
         short_sha(target.id.as_str()),
     ))
 }
 
 fn format_listing(snapshots: &[crate::snapshot::Snapshot]) -> String {
-    let mut out = String::from("Recent snapshots (newest first; pass /restore <N> to revert):\n");
+    let mut out = String::from("最近快照（最新在前；使用 /restore <N> 回滚）：\n");
     for (i, s) in snapshots.iter().enumerate() {
         out.push_str(&format!(
             "  #{:<2}  {}  {}\n",
@@ -168,7 +165,7 @@ mod tests {
         let mut app = make_app(&tmp, true);
         let result = restore(&mut app, None);
         let msg = result.message.expect("expected message");
-        assert!(msg.contains("No snapshots"));
+        assert!(msg.contains("还没有快照"));
     }
 
     #[test]
@@ -204,7 +201,7 @@ mod tests {
         repo.snapshot("post-turn:1").unwrap();
 
         let result = restore(&mut app, Some("2"));
-        assert!(result.message.unwrap().contains("Restored"));
+        assert!(result.message.unwrap().contains("已恢复快照"));
         let after = std::fs::read_to_string(&f).unwrap();
         assert_eq!(after, "original");
     }
@@ -220,7 +217,7 @@ mod tests {
 
         let result = restore(&mut app, Some("1"));
         let msg = result.message.expect("expected message");
-        assert!(msg.contains("Refusing"));
+        assert!(msg.contains("拒绝恢复"));
         assert!(msg.contains("/trust on"));
     }
 
@@ -235,7 +232,7 @@ mod tests {
 
         let result = restore(&mut app, Some("99"));
         let msg = result.message.expect("expected message");
-        assert!(msg.contains("Only 1 snapshot"));
+        assert!(msg.contains("当前只有 1 个快照"));
     }
 
     #[test]
@@ -251,6 +248,6 @@ mod tests {
 
         let result = restore(&mut app, Some("0"));
         let msg = result.message.expect("expected message");
-        assert!(msg.contains("Usage:"));
+        assert!(msg.contains("用法："));
     }
 }

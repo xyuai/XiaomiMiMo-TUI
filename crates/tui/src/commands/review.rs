@@ -11,13 +11,13 @@ fn warnings_suffix(registry: &SkillRegistry) -> String {
         return String::new();
     }
 
-    format!("\n\nWarnings:\n- {}", registry.warnings().join("\n- "))
+    format!("\n\n警告：\n- {}", registry.warnings().join("\n- "))
 }
 
 pub fn review(app: &mut App, args: Option<&str>) -> CommandResult {
     let target = args.unwrap_or("").trim();
     if target.is_empty() {
-        return CommandResult::error("Usage: /review <target>");
+        return CommandResult::error("用法：/review <target>");
     }
 
     let skills_dir = app.skills_dir.clone();
@@ -41,7 +41,7 @@ pub fn review(app: &mut App, args: Option<&str>) -> CommandResult {
         None => {
             let global_display = global_dir.display();
             return CommandResult::error(format!(
-                "Review skill not found in {} or {}. Create ~/.xiaomimimo/skills/review/SKILL.md.{}",
+                "在 {} 或 {} 中未找到 review 技能。请创建 ~/.xiaomimimo/skills/review/SKILL.md。{}",
                 skills_dir.display(),
                 global_display,
                 warnings
@@ -55,7 +55,7 @@ pub fn review(app: &mut App, args: Option<&str>) -> CommandResult {
     );
 
     app.add_message(HistoryCell::System {
-        content: format!("Activated skill: {}\n\n{}", skill.name, skill.description),
+        content: format!("已激活技能：{}\n\n{}", skill.name, skill.description),
     });
     app.active_skill = Some(instruction);
 
@@ -108,7 +108,7 @@ mod tests {
         let mut app = create_test_app_with_tmpdir(&tmpdir);
         let result = review(&mut app, None);
         assert!(result.message.is_some());
-        assert!(result.message.unwrap().contains("Usage: /review"));
+        assert!(result.message.unwrap().contains("用法：/review"));
     }
 
     #[test]

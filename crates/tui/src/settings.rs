@@ -275,7 +275,7 @@ impl Settings {
     /// Get all settings as a displayable string
     pub fn display(&self) -> String {
         let mut lines = Vec::new();
-        lines.push("Settings:".to_string());
+        lines.push("设置：".to_string());
         lines.push("─────────────────────────────".to_string());
         lines.push(format!("  auto_compact:       {}", self.auto_compact));
         lines.push(format!("  calm_mode:          {}", self.calm_mode));
@@ -301,12 +301,12 @@ impl Settings {
         lines.push(format!("  max_history:        {}", self.max_input_history));
         lines.push(format!(
             "  default_model:      {}",
-            self.default_model.as_deref().unwrap_or("(default)")
+            self.default_model.as_deref().unwrap_or("（默认）")
         ));
         lines.push(String::new());
         lines.push(format!(
-            "Config file: {}",
-            Self::path().map_or_else(|_| "(unknown)".to_string(), |p| p.display().to_string())
+            "配置文件：{}",
+            Self::path().map_or_else(|_| "（未知）".to_string(), |p| p.display().to_string())
         ));
         lines.join("\n")
     }
@@ -317,50 +317,41 @@ impl Settings {
         vec![
             (
                 "auto_compact",
-                "Auto-compact near context limit: on/off (default off)",
+                "接近上下文上限时自动压缩：on/off（默认 off）",
             ),
-            ("calm_mode", "Calmer UI defaults: on/off"),
-            ("low_motion", "Reduce animation and redraw churn: on/off"),
-            (
-                "fancy_animations",
-                "Fancy footer animations (water-spout strip): on/off",
-            ),
+            ("calm_mode", "更平静的 UI 默认值：on/off"),
+            ("low_motion", "减少动画和重绘：on/off"),
+            ("fancy_animations", "底部花哨动画（水柱条）：on/off"),
             (
                 "bracketed_paste",
-                "Terminal bracketed-paste mode: on/off (rare to disable)",
+                "终端 bracketed-paste 模式：on/off（通常不需要关闭）",
             ),
-            (
-                "paste_burst_detection",
-                "Fallback rapid-key paste detection: on/off",
-            ),
-            ("show_thinking", "Show model thinking: on/off"),
-            ("show_tool_details", "Show detailed tool output: on/off"),
+            ("paste_burst_detection", "备用快速按键粘贴检测：on/off"),
+            ("show_thinking", "显示模型思考：on/off"),
+            ("show_tool_details", "显示详细工具输出：on/off"),
             (
                 "locale",
-                "UI locale: auto, en, ja, zh-Hans, pt-BR (model output is unchanged)",
+                "UI 语言：auto、en、ja、zh-Hans、pt-BR（不改变模型输出）",
             ),
             (
                 "composer_density",
-                "Composer density: compact, comfortable, spacious",
+                "输入框密度：compact、comfortable、spacious",
             ),
-            (
-                "composer_border",
-                "Show a border around the composer input area: on/off",
-            ),
+            ("composer_border", "在输入框区域显示边框：on/off"),
             (
                 "transcript_spacing",
-                "Transcript spacing: compact, comfortable, spacious",
+                "转录间距：compact、comfortable、spacious",
             ),
-            ("default_mode", "Default mode: agent, plan, yolo"),
-            ("sidebar_width", "Sidebar width percentage: 10-50"),
+            ("default_mode", "默认模式：agent、plan、yolo"),
+            ("sidebar_width", "侧边栏宽度百分比：10-50"),
             (
                 "sidebar_focus",
-                "Sidebar focus: auto, plan, todos, tasks, agents",
+                "侧边栏焦点：auto、plan、todos、tasks、agents",
             ),
-            ("max_history", "Max input history entries"),
+            ("max_history", "最大输入历史条目数"),
             (
                 "default_model",
-                "Default model: any XiaomiMiMo model ID (e.g. mimo-v2.5-pro)",
+                "默认模型：任意 XiaomiMiMo 模型 ID（例如 mimo-v2.5-pro）",
             ),
         ]
     }

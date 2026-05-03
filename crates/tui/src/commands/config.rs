@@ -16,13 +16,13 @@ pub fn show_config(_app: &mut App, arg: Option<&str>) -> CommandResult {
             "native" => {}
             "tui" | "web" => {
                 return CommandResult::with_message_and_action(
-                    "This XiaomiMiMo build keeps the native config modal only; opening /config.",
+                    "当前 XiaomiMiMo 构建仅保留原生配置弹窗；正在打开 /config。",
                     AppAction::OpenConfigView,
                 );
             }
             other => {
                 return CommandResult::error(format!(
-                    "Unknown config editor mode '{other}'. Use: /config, /config native, or /config <key> [value]."
+                    "未知配置编辑器模式 '{other}'。用法：/config、/config native 或 /config <key> [value]。"
                 ));
             }
         }
@@ -116,7 +116,7 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
                 .iter()
                 .any(|(known, _)| *known == key)
             {
-                Some("(see /settings for persisted value)".to_string())
+                Some("（持久化值请查看 /settings）".to_string())
             } else {
                 None
             }
@@ -126,7 +126,7 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
     match value {
         Some(v) => CommandResult::message(format!("{key} = {v}")),
         None => CommandResult::error(format!(
-            "Unknown setting '{key}'. Use `/settings` to inspect persistent settings."
+            "未知设置 '{key}'。请用 `/settings` 查看持久化设置。"
         )),
     }
 }
@@ -135,7 +135,7 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
 pub fn show_settings(_app: &mut App) -> CommandResult {
     match Settings::load() {
         Ok(settings) => CommandResult::message(settings.display()),
-        Err(e) => CommandResult::error(format!("Failed to load settings: {e}")),
+        Err(e) => CommandResult::error(format!("加载设置失败：{e}")),
     }
 }
 
@@ -148,15 +148,15 @@ pub fn lsp_command(_app: &mut App, arg: Option<&str>) -> CommandResult {
     match raw.to_ascii_lowercase().as_str() {
         "status" | "show" => match load_lsp_enabled() {
             Ok((enabled, path)) => CommandResult::message(format!(
-                "LSP diagnostics: {} (config: {}). Runtime manager reads this at startup.",
-                if enabled { "enabled" } else { "disabled" },
+                "LSP 诊断：{}（配置：{}）。运行管理器会在启动时读取该设置。",
+                if enabled { "已启用" } else { "已禁用" },
                 path.display()
             )),
-            Err(err) => CommandResult::error(format!("Failed to read LSP config: {err}")),
+            Err(err) => CommandResult::error(format!("读取 LSP 配置失败：{err}")),
         },
         "on" | "enable" | "enabled" => persist_lsp_enabled(true),
         "off" | "disable" | "disabled" => persist_lsp_enabled(false),
-        _ => CommandResult::error("Usage: /lsp [status|on|off]"),
+        _ => CommandResult::error("用法：/lsp [status|on|off]"),
     }
 }
 
@@ -184,12 +184,12 @@ fn persist_lsp_enabled(enabled: bool) -> CommandResult {
     use std::fs;
     let path = match config_toml_path() {
         Ok(path) => path,
-        Err(err) => return CommandResult::error(format!("Failed to resolve config: {err}")),
+        Err(err) => return CommandResult::error(format!("解析配置路径失败：{err}")),
     };
     if let Some(parent) = path.parent()
         && let Err(err) = fs::create_dir_all(parent)
     {
-        return CommandResult::error(format!("Failed to create config dir: {err}"));
+        return CommandResult::error(format!("创建配置目录失败：{err}"));
     }
     let mut doc: toml::Value = if path.exists() {
         match fs::read_to_string(&path)
@@ -205,25 +205,25 @@ fn persist_lsp_enabled(enabled: bool) -> CommandResult {
         toml::Value::Table(toml::value::Table::new())
     };
     let Some(root) = doc.as_table_mut() else {
-        return CommandResult::error("config.toml root must be a table");
+        return CommandResult::error("config.toml 根节点必须是 table");
     };
     let lsp = root
         .entry("lsp".to_string())
         .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
     let Some(lsp_table) = lsp.as_table_mut() else {
-        return CommandResult::error("`lsp` section in config.toml must be a table");
+        return CommandResult::error("config.toml 中的 `lsp` 段必须是 table");
     };
     lsp_table.insert("enabled".to_string(), toml::Value::Boolean(enabled));
     let body = match toml::to_string_pretty(&doc) {
         Ok(body) => body,
-        Err(err) => return CommandResult::error(format!("Failed to serialize config: {err}")),
+        Err(err) => return CommandResult::error(format!("序列化配置失败：{err}")),
     };
     if let Err(err) = crate::utils::write_atomic(&path, body.as_bytes()) {
-        return CommandResult::error(format!("Failed to write config: {err}"));
+        return CommandResult::error(format!("写入配置失败：{err}"));
     }
     CommandResult::message(format!(
-        "LSP diagnostics {} (saved to {}; restart current engine/session to apply)",
-        if enabled { "enabled" } else { "disabled" },
+        "LSP 诊断{}（已保存到 {}；重启当前引擎/会话后生效）",
+        if enabled { "已启用" } else { "已禁用" },
         path.display()
     ))
 }
@@ -232,17 +232,15 @@ fn persist_lsp_enabled(enabled: bool) -> CommandResult {
 pub fn profile(app: &mut App, arg: Option<&str>) -> CommandResult {
     let Some(name) = arg.map(str::trim).filter(|s| !s.is_empty()) else {
         return CommandResult::message(
-            "Usage: /profile <name>\nLoads [profiles.<name>] for this session. Some settings still require restart.",
+            "用法：/profile <name>\n为本会话加载 [profiles.<name>]。部分设置仍需重启后生效。",
         );
     };
     let config_path = match config_toml_path() {
         Ok(path) => path,
-        Err(err) => return CommandResult::error(format!("Failed to resolve config path: {err}")),
+        Err(err) => return CommandResult::error(format!("解析配置路径失败：{err}")),
     };
     if !config_path.exists() {
-        return CommandResult::error(format!(
-            "Profile '{name}' not found. Available profiles: none"
-        ));
+        return CommandResult::error(format!("未找到配置档 '{name}'。可用配置档：无"));
     }
     let cfg = match Config::load(Some(config_path), Some(name)) {
         Ok(cfg) => cfg,
@@ -267,7 +265,7 @@ pub fn profile(app: &mut App, arg: Option<&str>) -> CommandResult {
 
     CommandResult::with_message_and_action(
         format!(
-            "profile '{name}' applied for this session: model={model}, provider={}, effort={}, mcp={}. MCP/LSP/server pools may need restart.",
+            "配置档 '{name}' 已应用到本会话：model={model}，provider={}，effort={}，mcp={}。MCP/LSP/服务池可能需要重启。",
             app.api_provider.as_str(),
             app.reasoning_effort.as_setting(),
             app.mcp_config_path.display(),
@@ -387,7 +385,7 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
         "model" => {
             let Some(model) = normalize_model_name(value) else {
                 return CommandResult::error(format!(
-                    "Invalid model '{value}'. Expected a XiaomiMiMo model ID. Common models: {}",
+                    "无效模型 '{value}'。请输入 XiaomiMiMo 模型 ID。常用模型：{}",
                     COMMON_XIAOMIMIMO_MODELS.join(", ")
                 ));
             };
@@ -416,28 +414,28 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                     )
                 }
                 None => CommandResult::error(
-                    "Invalid approval_mode. Use: auto, suggest/on-request/untrusted, never",
+                    "无效 approval_mode。可用：auto、suggest/on-request/untrusted、never",
                 ),
             };
         }
         "mcp_config_path" | "mcp" => {
             if value.trim().is_empty() {
-                return CommandResult::error("mcp_config_path cannot be empty");
+                return CommandResult::error("mcp_config_path 不能为空");
             }
             app.mcp_config_path = PathBuf::from(expand_tilde(value));
             app.mcp_restart_required = true;
             let message = if persist {
                 match persist_root_string_key("mcp_config_path", value) {
                     Ok(path) => format!(
-                        "mcp_config_path = {} (saved to {}; restart required for MCP tool pool)",
+                        "mcp_config_path = {}（已保存到 {}；MCP 工具池需重启）",
                         app.mcp_config_path.display(),
                         path.display()
                     ),
-                    Err(err) => return CommandResult::error(format!("Failed to save: {err}")),
+                    Err(err) => return CommandResult::error(format!("保存失败：{err}")),
                 }
             } else {
                 format!(
-                    "mcp_config_path = {} (session only; restart required for MCP tool pool)",
+                    "mcp_config_path = {}（仅本会话；MCP 工具池需重启）",
                     app.mcp_config_path.display()
                 )
             };
@@ -449,12 +447,10 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
     let mut settings = match Settings::load() {
         Ok(s) => s,
         Err(e) if !persist => {
-            app.status_message = Some(format!(
-                "Settings unavailable; applying session-only override ({e})"
-            ));
+            app.status_message = Some(format!("设置不可用；正在应用仅本会话覆盖（{e}）"));
             Settings::default()
         }
-        Err(e) => return CommandResult::error(format!("Failed to load settings: {e}")),
+        Err(e) => return CommandResult::error(format!("加载设置失败：{e}")),
     };
 
     if let Err(e) = settings.set(&key, value) {
@@ -541,11 +537,11 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
 
     let message = if persist {
         if let Err(e) = settings.save() {
-            return CommandResult::error(format!("Failed to save: {e}"));
+            return CommandResult::error(format!("保存失败：{e}"));
         }
-        format!("{key} = {display_value} (saved)")
+        format!("{key} = {display_value}（已保存）")
     } else {
-        format!("{key} = {display_value} (session only, add --save to persist)")
+        format!("{key} = {display_value}（仅本会话，添加 --save 可持久化）")
     };
 
     CommandResult {
@@ -564,18 +560,18 @@ pub fn set_config(app: &mut App, args: Option<&str>) -> CommandResult {
             .collect::<Vec<_>>()
             .join("\n");
         return CommandResult::message(format!(
-            "Usage: /set <key> <value>\n\n\
-             Available settings:\n{available}\n\n\
-             Session-only settings:\n  \
-             model: Current model\n  \
+            "用法：/set <key> <value>\n\n\
+             可用设置：\n{available}\n\n\
+             仅本会话设置：\n  \
+             model: 当前模型\n  \
              approval_mode: auto | suggest | never\n\n\
-             Add --save to persist to settings file."
+             添加 --save 可持久化到设置文件。"
         ));
     };
 
     let parts: Vec<&str> = args.splitn(2, ' ').collect();
     if parts.len() < 2 {
-        return CommandResult::error("Usage: /set <key> <value>");
+        return CommandResult::error("用法：/set <key> <value>");
     }
 
     let key = parts[0].to_lowercase();
@@ -659,7 +655,7 @@ pub fn trust(app: &mut App, arg: Option<&str>) -> CommandResult {
         "add" => trust_add(&workspace, rest),
         "remove" | "rm" | "del" | "delete" => trust_remove(&workspace, rest),
         other => CommandResult::error(format!(
-            "Unknown /trust action `{other}`. Use `/trust`, `/trust on|off`, `/trust add <path>`, or `/trust remove <path>`."
+            "未知 /trust 操作 `{other}`。可用 `/trust`、`/trust on|off`、`/trust add <path>` 或 `/trust remove <path>`。"
         )),
     }
 }
@@ -668,24 +664,21 @@ fn trust_status(workspace: &Path, app: &App, force_paths: bool) -> CommandResult
     let trust = crate::workspace_trust::WorkspaceTrust::load_for(workspace);
     let mut lines = Vec::new();
     lines.push(format!(
-        "Workspace trust mode: {}",
+        "工作区信任模式：{}",
         if app.trust_mode {
-            "enabled"
+            "已启用"
         } else {
-            "disabled"
+            "已禁用"
         }
     ));
     if trust.paths().is_empty() {
         if force_paths {
-            lines.push("No external paths trusted from this workspace.".to_string());
+            lines.push("此工作区尚未信任外部路径。".to_string());
         } else {
-            lines.push(
-                "No external paths trusted yet. Use `/trust add <path>` to allow a directory."
-                    .to_string(),
-            );
+            lines.push("尚未信任外部路径。使用 `/trust add <path>` 允许一个目录。".to_string());
         }
     } else {
-        lines.push(format!("Trusted external paths ({}):", trust.paths().len()));
+        lines.push(format!("已信任的外部路径（{}）：", trust.paths().len()));
         for path in trust.paths() {
             lines.push(format!("  • {}", path.display()));
         }
@@ -695,35 +688,32 @@ fn trust_status(workspace: &Path, app: &App, force_paths: bool) -> CommandResult
 
 fn trust_add(workspace: &Path, raw: &str) -> CommandResult {
     if raw.is_empty() {
-        return CommandResult::error(
-            "Usage: /trust add <path>. Supply an absolute path or a path relative to the workspace.",
-        );
+        return CommandResult::error("用法：/trust add <path>。请提供绝对路径或相对工作区的路径。");
     }
     let path = PathBuf::from(expand_tilde(raw));
     if !path.exists() {
         return CommandResult::error(format!(
-            "Path not found: {} — supply an existing directory or file.",
+            "路径不存在：{} — 请提供已存在的目录或文件。",
             path.display()
         ));
     }
     match crate::workspace_trust::add(workspace, &path) {
-        Ok(stored) => CommandResult::message(format!(
-            "Added to trust list for this workspace: {}",
-            stored.display()
-        )),
-        Err(err) => CommandResult::error(format!("Failed to update trust list: {err}")),
+        Ok(stored) => {
+            CommandResult::message(format!("已添加到此工作区的信任列表：{}", stored.display()))
+        }
+        Err(err) => CommandResult::error(format!("更新信任列表失败：{err}")),
     }
 }
 
 fn trust_remove(workspace: &Path, raw: &str) -> CommandResult {
     if raw.is_empty() {
-        return CommandResult::error("Usage: /trust remove <path>");
+        return CommandResult::error("用法：/trust remove <path>");
     }
     let path = PathBuf::from(expand_tilde(raw));
     match crate::workspace_trust::remove(workspace, &path) {
-        Ok(true) => CommandResult::message(format!("Removed from trust list: {}", path.display())),
-        Ok(false) => CommandResult::message(format!("Not in trust list: {}", path.display())),
-        Err(err) => CommandResult::error(format!("Failed to update trust list: {err}")),
+        Ok(true) => CommandResult::message(format!("已从信任列表移除：{}", path.display())),
+        Ok(false) => CommandResult::message(format!("不在信任列表中：{}", path.display())),
+        Err(err) => CommandResult::error(format!("更新信任列表失败：{err}")),
     }
 }
 
@@ -748,9 +738,9 @@ pub fn logout(app: &mut App) -> CommandResult {
             app.onboarding_needs_api_key = true;
             app.api_key_input.clear();
             app.api_key_cursor = 0;
-            CommandResult::message("Logged out. Enter a new API key to continue.")
+            CommandResult::message("已退出登录。请输入新的 API key 继续。")
         }
-        Err(e) => CommandResult::error(format!("Failed to clear API key: {e}")),
+        Err(e) => CommandResult::error(format!("清除 API key 失败：{e}")),
     }
 }
 
@@ -907,8 +897,8 @@ mod tests {
         let result = set_config(&mut app, None);
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("Usage: /set"));
-        assert!(msg.contains("Available settings:"));
+        assert!(msg.contains("用法：/set"));
+        assert!(msg.contains("可用设置："));
     }
 
     #[test]
@@ -963,7 +953,7 @@ mod tests {
         let mut app = create_test_app();
         let result = set_config(&mut app, Some("default_mode normal --save"));
         let msg = result.message.unwrap();
-        assert_eq!(msg, "default_mode = agent (saved)");
+        assert_eq!(msg, "default_mode = agent（已保存）");
         assert_eq!(app.mode, AppMode::Agent);
 
         let settings_path = Settings::path().unwrap();
@@ -996,7 +986,7 @@ mod tests {
         let result = set_config(&mut app, Some("approval_mode invalid"));
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("Invalid approval_mode"));
+        assert!(msg.contains("无效 approval_mode"));
     }
 
     #[test]
@@ -1006,7 +996,7 @@ mod tests {
         let result = set_config(&mut app, Some("auto_compact true"));
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("(session only"));
+        assert!(msg.contains("仅本会话"));
     }
 
     #[test]
@@ -1037,7 +1027,7 @@ mod tests {
         let mut app = create_test_app();
         let result = trust(&mut app, None);
         let msg = result.message.expect("status message");
-        assert!(msg.contains("Workspace trust mode"));
+        assert!(msg.contains("工作区信任模式"));
     }
 
     #[test]
@@ -1045,7 +1035,7 @@ mod tests {
         let mut app = create_test_app();
         let result = trust(&mut app, Some("add"));
         let msg = result.message.expect("error message");
-        assert!(msg.starts_with("Error:"), "got {msg:?}");
+        assert!(msg.starts_with("错误："), "got {msg:?}");
     }
 
     #[test]
@@ -1095,7 +1085,7 @@ mod tests {
         let result = set_config(&mut app, Some("model"));
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("Usage: /set"));
+        assert!(msg.contains("用法：/set"));
     }
 
     #[test]

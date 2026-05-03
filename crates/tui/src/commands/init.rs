@@ -14,7 +14,7 @@ pub fn init(app: &mut App) -> CommandResult {
     // Check if AGENTS.md already exists
     let agents_path = workspace.join("AGENTS.md");
     if agents_path.exists() {
-        return CommandResult::error("AGENTS.md already exists. Delete it first to reinitialize.");
+        return CommandResult::error("AGENTS.md 已存在。如需重新初始化，请先删除它。");
     }
 
     // Detect project type and generate appropriate content
@@ -23,10 +23,10 @@ pub fn init(app: &mut App) -> CommandResult {
     // Write the file
     match std::fs::write(&agents_path, &content) {
         Ok(()) => CommandResult::message(format!(
-            "Created AGENTS.md at {}\n\nEdit this file to customize agent behavior for your project.",
+            "已在 {} 创建 AGENTS.md\n\n可编辑此文件来自定义项目中的 agent 行为。",
             agents_path.display()
         )),
-        Err(e) => CommandResult::error(format!("Failed to create AGENTS.md: {e}")),
+        Err(e) => CommandResult::error(format!("创建 AGENTS.md 失败：{e}")),
     }
 }
 
@@ -189,7 +189,8 @@ mod tests {
         let result = init(&mut app);
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("Created AGENTS.md"));
+        assert!(msg.contains("已在"));
+        assert!(msg.contains("创建 AGENTS.md"));
         let agents_path = tmpdir.path().join("AGENTS.md");
         assert!(agents_path.exists());
     }
@@ -202,7 +203,7 @@ mod tests {
         std::fs::write(tmpdir.path().join("AGENTS.md"), "existing").unwrap();
         let result = init(&mut app);
         assert!(result.message.is_some());
-        assert!(result.message.unwrap().contains("already exists"));
+        assert!(result.message.unwrap().contains("已存在"));
     }
 
     #[test]

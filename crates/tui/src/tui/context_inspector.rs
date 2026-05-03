@@ -27,30 +27,28 @@ pub fn build_context_inspector_text(app: &App) -> String {
     let usage = context_usage(app);
     let status = context_status(usage.2);
 
-    let _ = writeln!(out, "Session Context");
+    let _ = writeln!(out, "会话上下文");
     let _ = writeln!(out, "---------------");
-    let _ = writeln!(out, "Model: {}", app.model);
-    let _ = writeln!(out, "Workspace: {}", app.workspace.display());
+    let _ = writeln!(out, "模型：{}", app.model);
+    let _ = writeln!(out, "工作区：{}", app.workspace.display());
     if let Some(session_id) = app.current_session_id.as_deref() {
-        let _ = writeln!(out, "Session: {}", session_id);
+        let _ = writeln!(out, "会话：{}", session_id);
     }
     let (used, max, percent) = usage;
     let _ = writeln!(
         out,
-        "Context: {status} - ~{used}/{max} tokens ({percent:.1}%)"
+        "上下文：{status} - ~{used}/{max} tokens（{percent:.1}%）"
     );
     let _ = writeln!(
         out,
-        "Transcript: {} cells, {} API messages",
+        "转录：{} 个单元，{} 条 API 消息",
         app.history.len(),
         app.api_messages.len()
     );
     let _ = writeln!(
         out,
-        "Workspace status: {}",
-        app.workspace_context
-            .as_deref()
-            .unwrap_or("not sampled yet")
+        "工作区状态：{}",
+        app.workspace_context.as_deref().unwrap_or("尚未采样")
     );
 
     let _ = writeln!(out);
@@ -75,18 +73,18 @@ fn context_usage(app: &App) -> (usize, u32, f64) {
 
 fn context_status(percent: f64) -> &'static str {
     if percent >= CONTEXT_CRITICAL_THRESHOLD_PERCENT {
-        "critical"
+        "严重"
     } else if percent >= CONTEXT_WARNING_THRESHOLD_PERCENT {
-        "high"
+        "偏高"
     } else {
-        "ok"
+        "正常"
     }
 }
 
 /// Inspect the system prompt structure, split into cache-friendly stable
 /// prefix blocks and the volatile working-set tail block.
 fn push_system_prompt_structure(out: &mut String, app: &App) {
-    let _ = writeln!(out, "System Prompt Structure");
+    let _ = writeln!(out, "系统提示词结构");
     let _ = writeln!(out, "-----------------------");
 
     // Conservative token estimate: ~3 chars per token (consistent with
@@ -119,26 +117,22 @@ fn push_system_prompt_structure(out: &mut String, app: &App) {
 
             let _ = writeln!(
                 out,
-                "  Stable prefix: {stable_count} block(s), ~{stable_tokens} tokens  [cache-friendly]"
+                "  稳定前缀：{stable_count} 个块，约 {stable_tokens} tokens  [适合缓存]"
             );
             if let Some(block) = working_block {
                 let _ = writeln!(
                     out,
-                    "  Volatile working set: 1 block, ~{working_tokens} tokens  [changes every turn]"
+                    "  易变工作集：1 个块，约 {working_tokens} tokens  [每轮都会变化]"
                 );
                 let _ = writeln!(
                     out,
-                    "    First line: {}",
+                    "    首行：{}",
                     block.text.lines().next().unwrap_or("(empty)")
                 );
             } else {
-                let _ = writeln!(out, "  Volatile working set: none");
+                let _ = writeln!(out, "  易变工作集：无");
             }
-            let _ = writeln!(
-                out,
-                "  Total: {} block(s), ~{total_est} tokens",
-                blocks.len()
-            );
+            let _ = writeln!(out, "  总计：{} 个块，约 {total_est} tokens", blocks.len());
         }
         Some(SystemPrompt::Text(text)) => {
             // Single text blob — stable/volatile not distinguishable
@@ -146,30 +140,27 @@ fn push_system_prompt_structure(out: &mut String, app: &App) {
             if has_working {
                 let _ = writeln!(
                     out,
-                    "  Single text blob (~{total_est} tokens) [contains working-set marker — structure unclear]"
+                    "  单个文本块（约 {total_est} tokens）[包含工作集标记，结构不明确]"
                 );
             } else {
-                let _ = writeln!(
-                    out,
-                    "  Single text blob (~{total_est} tokens) [stable prefix only]"
-                );
+                let _ = writeln!(out, "  单个文本块（约 {total_est} tokens）[仅稳定前缀]");
             }
         }
         None => {
-            let _ = writeln!(out, "  No system prompt set.");
+            let _ = writeln!(out, "  未设置系统提示词。");
         }
     }
 
     // Cache-economics hint
     let _ = writeln!(
         out,
-        "  Tip: Stable prefix blocks are XiaomiMiMo V4 prefix-cache eligible. \
-        Volatile working-set changes break the cache only for the tail."
+        "  提示：稳定前缀块可命中 XiaomiMiMo V4 前缀缓存；\
+        易变工作集只会让尾部缓存失效。"
     );
 }
 
 fn push_references(out: &mut String, references: &[SessionContextReference]) {
-    let _ = writeln!(out, "References");
+    let _ = writeln!(out, "引用");
     let _ = writeln!(out, "----------");
 
     let mut seen = HashSet::new();
@@ -186,7 +177,7 @@ fn push_references(out: &mut String, references: &[SessionContextReference]) {
         if rendered >= MAX_REFERENCE_ROWS {
             let remaining = references.len().saturating_sub(rendered);
             if remaining > 0 {
-                let _ = writeln!(out, "- ... {remaining} more reference(s)");
+                let _ = writeln!(out, "- ... 还有 {remaining} 个引用");
             }
             break;
         }
@@ -197,12 +188,12 @@ fn push_references(out: &mut String, references: &[SessionContextReference]) {
         };
         let state = if reference.included {
             if reference.expanded {
-                "included"
+                "已包含"
             } else {
-                "attached"
+                "已附加"
             }
         } else {
-            "not included"
+            "未包含"
         };
         let detail = reference
             .detail
@@ -219,15 +210,12 @@ fn push_references(out: &mut String, references: &[SessionContextReference]) {
     }
 
     if rendered == 0 {
-        let _ = writeln!(
-            out,
-            "- No file, directory, or media references recorded yet."
-        );
+        let _ = writeln!(out, "- 尚未记录文件、目录或媒体引用。");
     }
 }
 
 fn push_tools(out: &mut String, app: &App) {
-    let _ = writeln!(out, "Recent Tools");
+    let _ = writeln!(out, "最近工具");
     let _ = writeln!(out, "------------");
 
     let mut rows: Vec<(usize, &ToolDetailRecord)> = app
@@ -239,7 +227,7 @@ fn push_tools(out: &mut String, app: &App) {
 
     let mut rendered = 0usize;
     for detail in app.active_tool_details.values() {
-        push_tool_row(out, "active", detail);
+        push_tool_row(out, "活跃", detail);
         rendered += 1;
         if rendered >= MAX_TOOL_ROWS {
             return;
@@ -249,26 +237,23 @@ fn push_tools(out: &mut String, app: &App) {
         .into_iter()
         .take(MAX_TOOL_ROWS.saturating_sub(rendered))
     {
-        let location = format!("cell {cell_idx}");
+        let location = format!("单元 {cell_idx}");
         push_tool_row(out, &location, detail);
         rendered += 1;
     }
 
     if rendered == 0 {
-        let _ = writeln!(out, "- No tool activity recorded yet.");
+        let _ = writeln!(out, "- 尚未记录工具活动。");
     } else {
-        let _ = writeln!(
-            out,
-            "- Open the matching card and press Alt+V for full details."
-        );
+        let _ = writeln!(out, "- 打开对应卡片并按 Alt+V 查看完整详情。");
     }
 }
 
 fn push_tool_row(out: &mut String, location: &str, detail: &ToolDetailRecord) {
     let output_state = if detail.output.as_deref().is_some_and(|out| !out.is_empty()) {
-        "output captured"
+        "已捕获输出"
     } else {
-        "no output yet"
+        "暂无输出"
     };
     let _ = writeln!(
         out,
@@ -329,9 +314,9 @@ mod tests {
     fn inspector_formats_empty_state() {
         let app = test_app();
         let text = build_context_inspector_text(&app);
-        assert!(text.contains("Session Context"));
-        assert!(text.contains("No file, directory, or media references recorded yet."));
-        assert!(text.contains("No tool activity recorded yet."));
+        assert!(text.contains("会话上下文"));
+        assert!(text.contains("尚未记录文件、目录或媒体引用。"));
+        assert!(text.contains("尚未记录工具活动。"));
     }
 
     #[test]
@@ -371,15 +356,15 @@ mod tests {
         });
 
         let text = build_context_inspector_text(&app);
-        assert!(text.contains("Context: critical"), "{text}");
+        assert!(text.contains("上下文：严重"), "{text}");
     }
 
     #[test]
     fn inspector_no_system_prompt_shows_section() {
         let app = test_app();
         let text = build_context_inspector_text(&app);
-        assert!(text.contains("System Prompt Structure"));
-        assert!(text.contains("No system prompt set."));
+        assert!(text.contains("系统提示词结构"));
+        assert!(text.contains("未设置系统提示词。"));
     }
 
     #[test]
@@ -400,25 +385,19 @@ mod tests {
         ]));
 
         let text = build_context_inspector_text(&app);
-        assert!(text.contains("System Prompt Structure"));
+        assert!(text.contains("系统提示词结构"));
         assert!(
-            text.contains("Stable prefix: 1 block"),
+            text.contains("稳定前缀：1 个块"),
             "stable prefix count: {text}"
         );
         assert!(
-            text.contains("Volatile working set: 1 block"),
+            text.contains("易变工作集：1 个块"),
             "working set section: {text}"
         );
+        assert!(text.contains("[适合缓存]"), "cache hint for stable: {text}");
+        assert!(text.contains("[每轮都会变化]"), "volatile marker: {text}");
         assert!(
-            text.contains("[cache-friendly]"),
-            "cache hint for stable: {text}"
-        );
-        assert!(
-            text.contains("[changes every turn]"),
-            "volatile marker: {text}"
-        );
-        assert!(
-            text.contains("First line: ## Repo Working Set"),
+            text.contains("首行：## Repo Working Set"),
             "first line of working set: {text}"
         );
     }
@@ -441,8 +420,8 @@ mod tests {
         ]));
 
         let text = build_context_inspector_text(&app);
-        assert!(text.contains("Stable prefix: 2 block(s)"));
-        assert!(text.contains("Volatile working set: none"));
+        assert!(text.contains("稳定前缀：2 个块"));
+        assert!(text.contains("易变工作集：无"));
     }
 
     #[test]
@@ -453,8 +432,8 @@ mod tests {
         ));
 
         let text = build_context_inspector_text(&app);
-        assert!(text.contains("System Prompt Structure"));
-        assert!(text.contains("Single text blob"));
-        assert!(text.contains("working-set marker"));
+        assert!(text.contains("系统提示词结构"));
+        assert!(text.contains("单个文本块"));
+        assert!(text.contains("工作集标记"));
     }
 }

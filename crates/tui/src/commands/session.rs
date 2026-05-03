@@ -44,21 +44,21 @@ pub fn save(app: &mut App, path: Option<&str>) -> CommandResult {
         Ok(()) => {
             let json = match serde_json::to_string_pretty(&session) {
                 Ok(j) => j,
-                Err(e) => return CommandResult::error(format!("Failed to serialize session: {e}")),
+                Err(e) => return CommandResult::error(format!("序列化会话失败：{e}")),
             };
             match std::fs::write(&final_save_path, json) {
                 Ok(()) => {
                     app.current_session_id = Some(session.metadata.id.clone());
                     CommandResult::message(format!(
-                        "Session saved to {} (ID: {})",
+                        "会话已保存到 {}（ID：{}）",
                         final_save_path.display(),
                         &session.metadata.id[..8]
                     ))
                 }
-                Err(e) => CommandResult::error(format!("Failed to save session: {e}")),
+                Err(e) => CommandResult::error(format!("保存会话失败：{e}")),
             }
         }
-        Err(e) => CommandResult::error(format!("Failed to create directory: {e}")),
+        Err(e) => CommandResult::error(format!("创建目录失败：{e}")),
     }
 }
 
@@ -71,20 +71,20 @@ pub fn load(app: &mut App, path: Option<&str>) -> CommandResult {
             app.workspace.join(p)
         }
     } else {
-        return CommandResult::error("Usage: /load <path>");
+        return CommandResult::error("用法：/load <path>");
     };
 
     let content = match std::fs::read_to_string(&load_path) {
         Ok(c) => c,
         Err(e) => {
-            return CommandResult::error(format!("Failed to read session file: {e}"));
+            return CommandResult::error(format!("读取会话文件失败：{e}"));
         }
     };
 
     let session: crate::session_manager::SavedSession = match serde_json::from_str(&content) {
         Ok(s) => s,
         Err(e) => {
-            return CommandResult::error(format!("Failed to parse session file: {e}"));
+            return CommandResult::error(format!("解析会话文件失败：{e}"));
         }
     };
 
@@ -113,7 +113,7 @@ pub fn load(app: &mut App, path: Option<&str>) -> CommandResult {
 
     CommandResult::with_message_and_action(
         format!(
-            "Session loaded from {} (ID: {}, {} messages)",
+            "已从 {} 加载会话（ID：{}，{} 条消息）",
             load_path.display(),
             &session.metadata.id[..8],
             session.metadata.message_count
@@ -131,7 +131,7 @@ pub fn load(app: &mut App, path: Option<&str>) -> CommandResult {
 pub fn compact(_app: &mut App) -> CommandResult {
     // Trigger immediate compaction via engine
     CommandResult::with_message_and_action(
-        "Context compaction triggered...".to_string(),
+        "已触发上下文压缩...".to_string(),
         AppAction::CompactContext,
     )
 }
@@ -154,14 +154,14 @@ pub fn export(app: &mut App, path: Option<&str>) -> CommandResult {
         && !parent.as_os_str().is_empty()
         && let Err(e) = std::fs::create_dir_all(parent)
     {
-        return CommandResult::error(format!("Failed to create export directory: {e}"));
+        return CommandResult::error(format!("创建导出目录失败：{e}"));
     }
 
     let mut content = String::new();
-    content.push_str("# Chat Export\n\n");
+    content.push_str("# 聊天导出\n\n");
     let _ = write!(
         content,
-        "**Model:** {}\n**Workspace:** {}\n**Date:** {}\n\n---\n\n",
+        "**模型：** {}\n**工作区：** {}\n**日期：** {}\n\n---\n\n",
         app.model,
         app.workspace.display(),
         chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
@@ -169,24 +169,24 @@ pub fn export(app: &mut App, path: Option<&str>) -> CommandResult {
 
     for cell in &app.history {
         let (role, body) = match cell {
-            HistoryCell::User { content } => ("**You:**", content.clone()),
-            HistoryCell::Assistant { content, .. } => ("**Assistant:**", content.clone()),
-            HistoryCell::System { content } => ("*System:*", content.clone()),
+            HistoryCell::User { content } => ("**你：**", content.clone()),
+            HistoryCell::Assistant { content, .. } => ("**助手：**", content.clone()),
+            HistoryCell::System { content } => ("*系统：*", content.clone()),
             HistoryCell::Error { message, severity } => match severity {
-                crate::error_taxonomy::ErrorSeverity::Warning => ("**Warning:**", message.clone()),
-                crate::error_taxonomy::ErrorSeverity::Info => ("*Info:*", message.clone()),
-                _ => ("**Error:**", message.clone()),
+                crate::error_taxonomy::ErrorSeverity::Warning => ("**警告：**", message.clone()),
+                crate::error_taxonomy::ErrorSeverity::Info => ("*信息：*", message.clone()),
+                _ => ("**错误：**", message.clone()),
             },
-            HistoryCell::Thinking { content, .. } => ("*Thinking:*", content.clone()),
-            HistoryCell::Tool(tool) => ("**Tool:**", render_tool_cell(tool, 80)),
-            HistoryCell::SubAgent(sub) => ("**Sub-agent:**", render_subagent_cell(sub, 80)),
+            HistoryCell::Thinking { content, .. } => ("*思考：*", content.clone()),
+            HistoryCell::Tool(tool) => ("**工具：**", render_tool_cell(tool, 80)),
+            HistoryCell::SubAgent(sub) => ("**子代理：**", render_subagent_cell(sub, 80)),
             HistoryCell::ArchivedContext {
                 level,
                 range,
                 summary,
                 ..
             } => (
-                "**Archived Context:**",
+                "**已归档上下文：**",
                 format!("L{level} [{range}]: {summary}"),
             ),
         };
@@ -195,8 +195,8 @@ pub fn export(app: &mut App, path: Option<&str>) -> CommandResult {
     }
 
     match std::fs::write(&final_export_path, content) {
-        Ok(()) => CommandResult::message(format!("Exported to {}", final_export_path.display())),
-        Err(e) => CommandResult::error(format!("Failed to export: {e}")),
+        Ok(()) => CommandResult::message(format!("已导出到 {}", final_export_path.display())),
+        Err(e) => CommandResult::error(format!("导出失败：{e}")),
     }
 }
 
@@ -268,8 +268,8 @@ mod tests {
         let result = save(&mut app, Some(save_path.to_str().unwrap()));
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("Session saved to"));
-        assert!(msg.contains("ID:"));
+        assert!(msg.contains("会话已保存到"));
+        assert!(msg.contains("ID："));
         assert!(app.current_session_id.is_some());
         assert!(save_path.exists());
     }
@@ -290,7 +290,7 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().starts_with("session_"))
             .collect();
         // Test passes if file was created or if save returned success message
-        assert!(!entries.is_empty() || msg.contains("Session saved"));
+        assert!(!entries.is_empty() || msg.contains("会话已保存"));
     }
 
     #[test]
@@ -310,7 +310,7 @@ mod tests {
         let mut app = create_test_app_with_tmpdir(&tmpdir);
         let result = load(&mut app, None);
         assert!(result.message.is_some());
-        assert!(result.message.unwrap().contains("Usage: /load"));
+        assert!(result.message.unwrap().contains("用法：/load"));
     }
 
     #[test]
@@ -319,7 +319,7 @@ mod tests {
         let mut app = create_test_app_with_tmpdir(&tmpdir);
         let result = load(&mut app, Some("nonexistent.json"));
         assert!(result.message.is_some());
-        assert!(result.message.unwrap().contains("Failed to read"));
+        assert!(result.message.unwrap().contains("读取会话文件失败"));
     }
 
     #[test]
@@ -330,7 +330,7 @@ mod tests {
         std::fs::write(&bad_file, "not valid json").unwrap();
         let result = load(&mut app, Some(bad_file.to_str().unwrap()));
         assert!(result.message.is_some());
-        assert!(result.message.unwrap().contains("Failed to parse"));
+        assert!(result.message.unwrap().contains("解析会话文件失败"));
     }
 
     #[test]
@@ -354,9 +354,9 @@ mod tests {
         let result = load(&mut app2, Some(save_path.to_str().unwrap()));
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("Session loaded from"));
-        assert!(msg.contains("ID:"));
-        assert!(msg.contains("messages"));
+        assert!(msg.contains("已从"));
+        assert!(msg.contains("ID："));
+        assert!(msg.contains("条消息"));
         assert_eq!(app2.api_messages.len(), 1);
         assert_eq!(app2.total_tokens, 500);
         assert!(app2.current_session_id.is_some());
@@ -371,7 +371,7 @@ mod tests {
         let result = compact(&mut app);
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("compaction") || msg.contains("Compact"));
+        assert!(msg.contains("上下文压缩"));
         assert!(matches!(result.action, Some(AppAction::CompactContext)));
     }
 
@@ -391,14 +391,14 @@ mod tests {
         let result = export(&mut app, Some(export_path.to_str().unwrap()));
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("Exported to"));
+        assert!(msg.contains("已导出到"));
         assert!(export_path.exists());
 
         let content = std::fs::read_to_string(&export_path).unwrap();
-        assert!(content.contains("# Chat Export"));
-        assert!(content.contains("**Model:**"));
-        assert!(content.contains("**You:**"));
-        assert!(content.contains("**Assistant:**"));
+        assert!(content.contains("# 聊天导出"));
+        assert!(content.contains("**模型：**"));
+        assert!(content.contains("**你：**"));
+        assert!(content.contains("**助手：**"));
     }
 
     #[test]

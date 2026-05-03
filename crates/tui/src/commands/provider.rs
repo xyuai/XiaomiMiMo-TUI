@@ -27,7 +27,7 @@ pub fn provider(app: &mut App, args: Option<&str>) -> CommandResult {
 
     let Some(target) = ApiProvider::parse(name) else {
         return CommandResult::error(format!(
-            "Unknown provider '{name}'. Expected: xiaomimimo, nvidia-nim, openrouter, novita, fireworks, or sglang."
+            "未知 provider '{name}'。可用：xiaomimimo、nvidia-nim、openrouter、novita、fireworks 或 sglang。"
         ));
     };
 
@@ -37,14 +37,14 @@ pub fn provider(app: &mut App, args: Option<&str>) -> CommandResult {
             Some(normalized) => Some(normalized),
             None => {
                 return CommandResult::error(format!(
-                    "Invalid model '{raw}'. Try: flash, pro, tts, voiceclone, mimo-v2.5-pro, mimo-v2.5-tts."
+                    "无效模型 '{raw}'。可尝试：flash、pro、tts、voiceclone、mimo-v2.5-pro、mimo-v2.5-tts。"
                 ));
             }
         },
     };
 
     if target == app.api_provider && model.is_none() {
-        return CommandResult::message(format!("Already on provider: {}", target.as_str()));
+        return CommandResult::message(format!("当前已是 provider：{}", target.as_str()));
     }
 
     CommandResult::action(AppAction::SwitchProvider {
@@ -107,7 +107,7 @@ mod tests {
         let mut app = create_test_app();
         let result = provider(&mut app, Some("anthropic"));
         let msg = result.message.expect("expected error message");
-        assert!(msg.contains("Unknown provider"));
+        assert!(msg.contains("未知 provider"));
         assert!(msg.contains("openrouter"));
         assert!(msg.contains("novita"));
         assert!(result.action.is_none());
@@ -170,7 +170,7 @@ mod tests {
         let mut app = create_test_app();
         let result = provider(&mut app, Some("xiaomimimo"));
         let msg = result.message.expect("expected message");
-        assert!(msg.contains("Already on provider"));
+        assert!(msg.contains("当前已是 provider"));
         assert!(result.action.is_none());
     }
 
@@ -254,7 +254,7 @@ mod tests {
         let mut app = create_test_app();
         let result = provider(&mut app, Some("nim gpt-4"));
         let msg = result.message.expect("expected error message");
-        assert!(msg.contains("Invalid model"));
+        assert!(msg.contains("无效模型"));
         assert!(result.action.is_none());
     }
 }

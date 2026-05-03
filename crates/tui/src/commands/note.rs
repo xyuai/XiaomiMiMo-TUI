@@ -11,12 +11,12 @@ pub fn note(app: &mut App, content: Option<&str>) -> CommandResult {
     let note_content = match content {
         Some(c) => c.trim(),
         None => {
-            return CommandResult::error("Usage: /note <text>");
+            return CommandResult::error("用法：/note <text>");
         }
     };
 
     if note_content.is_empty() {
-        return CommandResult::error("Note content cannot be empty");
+        return CommandResult::error("备注内容不能为空");
     }
 
     // Determine notes path: workspace/.xiaomimimo/notes.md
@@ -26,7 +26,7 @@ pub fn note(app: &mut App, content: Option<&str>) -> CommandResult {
     if let Some(parent) = notes_path.parent()
         && let Err(e) = fs::create_dir_all(parent)
     {
-        return CommandResult::error(format!("Failed to create notes directory: {e}"));
+        return CommandResult::error(format!("创建备注目录失败：{e}"));
     }
 
     // Append to notes file
@@ -37,16 +37,16 @@ pub fn note(app: &mut App, content: Option<&str>) -> CommandResult {
     {
         Ok(f) => f,
         Err(e) => {
-            return CommandResult::error(format!("Failed to open notes file: {e}"));
+            return CommandResult::error(format!("打开备注文件失败：{e}"));
         }
     };
 
     // Write separator and note content
     if let Err(e) = writeln!(file, "\n---\n{}", note_content) {
-        return CommandResult::error(format!("Failed to write note: {e}"));
+        return CommandResult::error(format!("写入备注失败：{e}"));
     }
 
-    CommandResult::message(format!("Note appended to {}", notes_path.display()))
+    CommandResult::message(format!("备注已追加到 {}", notes_path.display()))
 }
 
 #[cfg(test)]
@@ -85,7 +85,7 @@ mod tests {
         let mut app = create_test_app_with_tmpdir(&tmpdir);
         let result = note(&mut app, None);
         assert!(result.message.is_some());
-        assert!(result.message.unwrap().contains("Usage: /note"));
+        assert!(result.message.unwrap().contains("用法：/note"));
     }
 
     #[test]
@@ -94,7 +94,7 @@ mod tests {
         let mut app = create_test_app_with_tmpdir(&tmpdir);
         let result = note(&mut app, Some("   "));
         assert!(result.message.is_some());
-        assert!(result.message.unwrap().contains("cannot be empty"));
+        assert!(result.message.unwrap().contains("不能为空"));
     }
 
     #[test]
@@ -104,7 +104,7 @@ mod tests {
         let result = note(&mut app, Some("Test note content"));
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("Note appended to"));
+        assert!(msg.contains("备注已追加到"));
 
         let notes_path = tmpdir.path().join(".xiaomimimo").join("notes.md");
         assert!(notes_path.exists());

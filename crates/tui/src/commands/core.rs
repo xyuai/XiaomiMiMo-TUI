@@ -14,15 +14,15 @@ pub fn help(app: &mut App, topic: Option<&str>) -> CommandResult {
         // Show help for specific command
         if let Some(cmd) = super::get_command_info(topic) {
             let mut help = format!(
-                "{}\n\n  {}\n\n  Usage: {}",
+                "{}\n\n  {}\n\n  用法：{}",
                 cmd.name, cmd.description, cmd.usage
             );
             if !cmd.aliases.is_empty() {
-                let _ = write!(help, "\n  Aliases: {}", cmd.aliases.join(", "));
+                let _ = write!(help, "\n  别名：{}", cmd.aliases.join(", "));
             }
             return CommandResult::message(help);
         }
-        return CommandResult::error(format!("Unknown command: {topic}"));
+        return CommandResult::error(format!("未知指令：{topic}"));
     }
 
     // Show help overlay
@@ -54,9 +54,9 @@ pub fn clear(app: &mut App) -> CommandResult {
     app.last_completion_tokens = None;
     app.current_session_id = None;
     let message = if todos_cleared {
-        "Conversation cleared".to_string()
+        "对话已清空".to_string()
     } else {
-        "Conversation cleared (plan state busy; run /clear again if needed)".to_string()
+        "对话已清空（计划状态正忙；如有需要请再次运行 /clear）".to_string()
     };
     CommandResult::with_message_and_action(
         message,
@@ -81,7 +81,7 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
     if let Some(name) = model_name {
         let Some(model_id) = normalize_model_name(name) else {
             return CommandResult::error(format!(
-                "Invalid model '{name}'. Expected a XiaomiMiMo model ID. Common models: {}",
+                "无效模型 '{name}'。请输入 XiaomiMiMo 模型 ID。常用模型：{}",
                 COMMON_XIAOMIMIMO_MODELS.join(", ")
             ));
         };
@@ -91,7 +91,7 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
         app.last_prompt_tokens = None;
         app.last_completion_tokens = None;
         CommandResult::with_message_and_action(
-            format!("Model changed: {old_model} → {model_id}"),
+            format!("模型已切换：{old_model} → {model_id}"),
             AppAction::UpdateCompaction(app.compaction_config()),
         )
     } else {
@@ -110,18 +110,18 @@ pub fn subagents(app: &mut App) -> CommandResult {
         app.view_stack
             .push(SubAgentsView::new(app.subagent_cache.clone()));
     }
-    app.status_message = Some("Fetching sub-agent status...".to_string());
+    app.status_message = Some("正在获取子代理状态...".to_string());
     CommandResult::action(AppAction::ListSubAgents)
 }
 
 /// Show `XiaomiMiMo` dashboard and docs links
 pub fn xiaomimimo_links() -> CommandResult {
     CommandResult::message(
-        "XiaomiMiMo Links:\n\
+        "XiaomiMiMo 链接：\n\
 ─────────────────────────────\n\
-Dashboard: https://platform.xiaomimimo.com\n\
-Docs:      https://platform.xiaomimimo.com/docs\n\n\
-Tip: API keys are available in the dashboard console.",
+控制台： https://platform.xiaomimimo.com\n\
+文档：   https://platform.xiaomimimo.com/docs\n\n\
+提示：API key 可在控制台中获取。",
     )
 }
 
@@ -130,69 +130,63 @@ pub fn home_dashboard(app: &mut App) -> CommandResult {
     let mut stats = String::new();
 
     // Basic info
-    let _ = writeln!(stats, "XiaomiMiMo TUI Home Dashboard");
+    let _ = writeln!(stats, "XiaomiMiMo TUI 首页");
     let _ = writeln!(stats, "============================================");
 
     // Model & mode
-    let _ = writeln!(stats, "Model:      {}", app.model);
-    let _ = writeln!(stats, "Mode:       {}", app.mode.label());
-    let _ = writeln!(stats, "Workspace:  {}", app.workspace.display());
+    let _ = writeln!(stats, "模型：      {}", app.model);
+    let _ = writeln!(stats, "模式：      {}", app.mode.label());
+    let _ = writeln!(stats, "工作区：    {}", app.workspace.display());
 
     // Session stats
     let history_count = app.history.len();
     let total_tokens = app.total_conversation_tokens;
     let queued_messages = app.queued_messages.len();
-    let _ = writeln!(stats, "History:    {} messages", history_count);
-    let _ = writeln!(stats, "Tokens:     {} (session)", total_tokens);
+    let _ = writeln!(stats, "历史：      {} 条消息", history_count);
+    let _ = writeln!(stats, "Tokens：    {}（会话）", total_tokens);
     if queued_messages > 0 {
-        let _ = writeln!(stats, "Queued:     {} messages", queued_messages);
+        let _ = writeln!(stats, "队列：      {} 条消息", queued_messages);
     }
 
     // Sub-agents
     let subagent_count = app.subagent_cache.len();
     if subagent_count > 0 {
-        let _ = writeln!(stats, "Sub-agents: {} active", subagent_count);
+        let _ = writeln!(stats, "子代理：    {} 个活跃", subagent_count);
     }
 
     // Active skill
     if let Some(skill) = &app.active_skill {
-        let _ = writeln!(stats, "Skill:      {} (active)", skill);
+        let _ = writeln!(stats, "技能：      {}（已激活）", skill);
     }
 
     // Quick actions section
-    let _ = writeln!(stats, "\nQuick Actions");
+    let _ = writeln!(stats, "\n快捷操作");
     let _ = writeln!(stats, "--------------------------------------------");
-    let _ = writeln!(stats, "/links      - Dashboard & API links");
-    let _ = writeln!(stats, "/skills      - List available skills");
-    let _ = writeln!(
-        stats,
-        "/config      - Open interactive configuration editor"
-    );
-    let _ = writeln!(stats, "/settings    - Show persistent settings");
-    let _ = writeln!(stats, "/model       - Switch or view model");
-    let _ = writeln!(stats, "/subagents   - List sub-agent status");
-    let _ = writeln!(stats, "/task list   - Show background task queue");
-    let _ = writeln!(stats, "/help        - Show help");
+    let _ = writeln!(stats, "/links      - 控制台和 API 链接");
+    let _ = writeln!(stats, "/skills      - 列出可用技能");
+    let _ = writeln!(stats, "/config      - 打开交互式配置编辑器");
+    let _ = writeln!(stats, "/settings    - 显示持久化设置");
+    let _ = writeln!(stats, "/model       - 切换或查看模型");
+    let _ = writeln!(stats, "/subagents   - 查看子代理状态");
+    let _ = writeln!(stats, "/task list   - 显示后台任务队列");
+    let _ = writeln!(stats, "/help        - 显示帮助");
 
     // Mode-specific tips
-    let _ = writeln!(stats, "\nMode Tips");
+    let _ = writeln!(stats, "\n模式提示");
     let _ = writeln!(stats, "--------------------------------------------");
     match app.mode {
         AppMode::Agent => {
-            let _ = writeln!(stats, "Agent mode - Use tools for autonomous tasks");
-            let _ = writeln!(
-                stats,
-                "  Use Ctrl+X to review in Plan mode before executing"
-            );
-            let _ = writeln!(stats, "  Type /yolo to enable full tool access");
+            let _ = writeln!(stats, "Agent 模式 - 使用工具执行自主任务");
+            let _ = writeln!(stats, "  使用 Ctrl+X 可在执行前进入 Plan 模式审查");
+            let _ = writeln!(stats, "  输入 /yolo 可启用完整工具访问");
         }
         AppMode::Yolo => {
-            let _ = writeln!(stats, "YOLO mode - Full tool access, no approvals");
-            let _ = writeln!(stats, "  Be careful with destructive operations!");
+            let _ = writeln!(stats, "YOLO 模式 - 完整工具访问，无需批准");
+            let _ = writeln!(stats, "  请谨慎执行破坏性操作！");
         }
         AppMode::Plan => {
-            let _ = writeln!(stats, "Plan mode - Design before implementing");
-            let _ = writeln!(stats, "  Use /plan to create structured checklists");
+            let _ = writeln!(stats, "Plan 模式 - 先设计再实现");
+            let _ = writeln!(stats, "  使用 /plan 创建结构化检查清单");
         }
     }
 
@@ -236,7 +230,7 @@ mod tests {
         let mut app = create_test_app();
         let result = help(&mut app, Some("nonexistent"));
         assert!(result.message.is_some());
-        assert!(result.message.unwrap().contains("Unknown command"));
+        assert!(result.message.unwrap().contains("未知指令"));
         assert!(result.action.is_none());
     }
 
@@ -247,8 +241,8 @@ mod tests {
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
         assert!(msg.contains("clear"));
-        assert!(msg.contains("Clear conversation history"));
-        assert!(msg.contains("Usage: /clear"));
+        assert!(msg.contains("清空对话历史"));
+        assert!(msg.contains("用法：/clear"));
     }
 
     #[test]
@@ -257,8 +251,8 @@ mod tests {
         let result = help(&mut app, Some("config"));
         let msg = result.message.expect("help topic should return message");
         assert!(msg.contains("config"));
-        assert!(msg.contains("Open interactive configuration editor"));
-        assert!(msg.contains("Usage: /config"));
+        assert!(msg.contains("交互式配置编辑器"));
+        assert!(msg.contains("用法：/config"));
     }
 
     #[test]
@@ -267,9 +261,9 @@ mod tests {
         let result = help(&mut app, Some("links"));
         let msg = result.message.expect("help topic should return message");
         assert!(msg.contains("links"));
-        assert!(msg.contains("Show XiaomiMiMo dashboard and docs links"));
-        assert!(msg.contains("Usage: /links"));
-        assert!(msg.contains("Aliases: dashboard, api"));
+        assert!(msg.contains("XiaomiMiMo 控制台和文档链接"));
+        assert!(msg.contains("用法：/links"));
+        assert!(msg.contains("别名：dashboard, api"));
     }
 
     #[test]
@@ -363,8 +357,8 @@ mod tests {
         let result = model(&mut app, Some("gpt-4"));
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("Invalid model"));
-        assert!(msg.contains("XiaomiMiMo model ID"));
+        assert!(msg.contains("无效模型"));
+        assert!(msg.contains("XiaomiMiMo 模型 ID"));
         assert!(msg.contains("mimo-v2.5-pro"));
         assert!(msg.contains("mimo-v2-flash"));
         assert!(result.action.is_none());
@@ -395,7 +389,7 @@ mod tests {
         assert_eq!(app.view_stack.top_kind(), Some(ModalKind::SubAgents));
         assert_eq!(
             app.status_message,
-            Some("Fetching sub-agent status...".to_string())
+            Some("正在获取子代理状态...".to_string())
         );
     }
 
@@ -404,7 +398,7 @@ mod tests {
         let result = xiaomimimo_links();
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("XiaomiMiMo Links"));
+        assert!(msg.contains("XiaomiMiMo 链接"));
         assert!(msg.contains("https://platform.xiaomimimo.com"));
         assert!(result.action.is_none());
     }
@@ -416,14 +410,14 @@ mod tests {
         let result = home_dashboard(&mut app);
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("XiaomiMiMo TUI Home Dashboard"));
-        assert!(msg.contains("Model:"));
-        assert!(msg.contains("Mode:"));
-        assert!(msg.contains("Workspace:"));
-        assert!(msg.contains("History:"));
-        assert!(msg.contains("Tokens:"));
-        assert!(msg.contains("Quick Actions"));
-        assert!(msg.contains("Mode Tips"));
+        assert!(msg.contains("XiaomiMiMo TUI 首页"));
+        assert!(msg.contains("模型："));
+        assert!(msg.contains("模式："));
+        assert!(msg.contains("工作区："));
+        assert!(msg.contains("历史："));
+        assert!(msg.contains("Tokens："));
+        assert!(msg.contains("快捷操作"));
+        assert!(msg.contains("模式提示"));
         assert!(result.action.is_none());
     }
 
@@ -437,7 +431,7 @@ mod tests {
             ));
         let result = home_dashboard(&mut app);
         let msg = result.message.unwrap();
-        assert!(msg.contains("Queued:"));
+        assert!(msg.contains("队列："));
     }
 
     #[test]
@@ -448,7 +442,7 @@ mod tests {
             app.mode = mode;
             let result = home_dashboard(&mut app);
             let msg = result.message.unwrap();
-            assert!(msg.contains("Mode Tips"), "Missing tips for mode {mode:?}");
+            assert!(msg.contains("模式提示"), "Missing tips for mode {mode:?}");
         }
     }
 
@@ -459,8 +453,8 @@ mod tests {
         let msg = result
             .message
             .expect("home dashboard should return message");
-        assert!(msg.contains("/links      - Dashboard & API links"));
-        assert!(msg.contains("/config      - Open interactive configuration editor"));
+        assert!(msg.contains("/links      - 控制台和 API 链接"));
+        assert!(msg.contains("/config      - 打开交互式配置编辑器"));
         assert!(
             !msg.lines()
                 .any(|line| line.trim_start().starts_with("/set "))

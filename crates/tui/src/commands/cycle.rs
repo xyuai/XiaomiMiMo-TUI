@@ -11,9 +11,9 @@ use super::CommandResult;
 pub fn list_cycles(app: &App) -> CommandResult {
     if app.cycle_briefings.is_empty() {
         let msg = format!(
-            "No cycle boundaries have fired yet (current cycle: 1, threshold: {} tokens for {}).",
-            app.cycle.threshold_for(&app.model),
-            app.model
+            "还没有触发周期边界（当前周期：1，{} 的阈值：{} tokens）。",
+            app.model,
+            app.cycle.threshold_for(&app.model)
         );
         return CommandResult::message(msg);
     }
@@ -21,7 +21,7 @@ pub fn list_cycles(app: &App) -> CommandResult {
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "Cycle handoffs in this session ({} total). Active cycle: {}.",
+        "本会话的周期交接（共 {} 个）。当前活跃周期：{}。",
         app.cycle_briefings.len(),
         app.cycle_count.saturating_add(1),
     );
@@ -30,7 +30,7 @@ pub fn list_cycles(app: &App) -> CommandResult {
         let preview = first_line(&brief.briefing_text, 80);
         let _ = writeln!(
             out,
-            "  cycle {n}  @ {ts}  briefing: {tokens} tokens  ─ {preview}",
+            "  周期 {n}  @ {ts}  简报：{tokens} tokens  ─ {preview}",
             n = brief.cycle,
             ts = brief.timestamp.to_rfc3339(),
             tokens = brief.token_estimate,
@@ -38,7 +38,7 @@ pub fn list_cycles(app: &App) -> CommandResult {
         );
     }
     out.push('\n');
-    out.push_str("Use `/cycle <n>` to show the full briefing for a specific cycle.\n");
+    out.push_str("使用 `/cycle <n>` 查看指定周期的完整简报。\n");
     CommandResult::message(out)
 }
 
@@ -46,16 +46,14 @@ pub fn list_cycles(app: &App) -> CommandResult {
 pub fn show_cycle(app: &App, arg: Option<&str>) -> CommandResult {
     let Some(raw) = arg.map(str::trim) else {
         return CommandResult::error(
-            "Usage: /cycle <n>  — n is the cycle number from /cycles".to_string(),
+            "用法：/cycle <n>  — n 是 /cycles 中显示的周期编号".to_string(),
         );
     };
     if raw.is_empty() {
-        return CommandResult::error("Usage: /cycle <n>".to_string());
+        return CommandResult::error("用法：/cycle <n>".to_string());
     }
     let Ok(n) = raw.parse::<u32>() else {
-        return CommandResult::error(format!(
-            "Cycle number must be a positive integer (got '{raw}')."
-        ));
+        return CommandResult::error(format!("周期编号必须是正整数（收到 '{raw}'）。"));
     };
 
     let Some(brief) = app.cycle_briefings.iter().find(|b| b.cycle == n) else {
@@ -65,19 +63,17 @@ pub fn show_cycle(app: &App, arg: Option<&str>) -> CommandResult {
             .map(|b| b.cycle.to_string())
             .collect();
         let known_str = if known.is_empty() {
-            "(none)".to_string()
+            "（无）".to_string()
         } else {
             known.join(", ")
         };
-        return CommandResult::error(format!(
-            "Cycle {n} not found in this session. Known cycles: {known_str}."
-        ));
+        return CommandResult::error(format!("本会话中未找到周期 {n}。已知周期：{known_str}。"));
     };
 
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "── Cycle {n}  ({ts})  briefing: {tokens} tokens ──",
+        "── 周期 {n}  ({ts})  简报：{tokens} tokens ──",
         n = brief.cycle,
         ts = brief.timestamp.to_rfc3339(),
         tokens = brief.token_estimate,
@@ -99,10 +95,10 @@ pub fn recall_archive(app: &App, arg: Option<&str>) -> CommandResult {
     use crate::tools::spec::{ToolContext, ToolSpec};
 
     let Some(raw) = arg.map(str::trim) else {
-        return CommandResult::error("Usage: /recall <query>".to_string());
+        return CommandResult::error("用法：/recall <query>".to_string());
     };
     if raw.is_empty() {
-        return CommandResult::error("Usage: /recall <query>".to_string());
+        return CommandResult::error("用法：/recall <query>".to_string());
     }
 
     let session_id = app
@@ -120,7 +116,7 @@ pub fn recall_archive(app: &App, arg: Option<&str>) -> CommandResult {
 
     match result {
         Ok(res) => CommandResult::message(res.content),
-        Err(err) => CommandResult::error(format!("recall_archive failed: {err}")),
+        Err(err) => CommandResult::error(format!("recall_archive 失败：{err}")),
     }
 }
 
@@ -178,7 +174,7 @@ mod tests {
             res.message
                 .as_deref()
                 .unwrap()
-                .contains("No cycle boundaries")
+                .contains("还没有触发周期边界")
         );
     }
 
@@ -187,7 +183,7 @@ mod tests {
         let app = App::new(test_options(), &crate::config::Config::default());
         let res = show_cycle(&app, Some("3"));
         let msg = res.message.expect("error message");
-        assert!(msg.contains("Cycle 3 not found"), "got: {msg}");
+        assert!(msg.contains("未找到周期 3"), "got: {msg}");
     }
 
     #[test]
@@ -202,7 +198,7 @@ mod tests {
         app.cycle_count = 1;
 
         let listed = list_cycles(&app).message.expect("list message");
-        assert!(listed.contains("cycle 1"));
+        assert!(listed.contains("周期 1"));
         assert!(listed.contains("12 tokens"));
 
         let shown = show_cycle(&app, Some("1")).message.expect("show message");
@@ -214,10 +210,10 @@ mod tests {
         let app = App::new(test_options(), &crate::config::Config::default());
         let res = show_cycle(&app, None);
         let msg = res.message.expect("error message");
-        assert!(msg.contains("Usage: /cycle"));
+        assert!(msg.contains("用法：/cycle"));
 
         let res = show_cycle(&app, Some("not-a-number"));
         let msg = res.message.expect("error message");
-        assert!(msg.contains("must be a positive integer"));
+        assert!(msg.contains("必须是正整数"));
     }
 }

@@ -9,7 +9,7 @@ use crate::tui::app::{App, AppAction};
 use crate::tui::history::HistoryCell;
 
 fn token_count(value: Option<u32>) -> String {
-    value.map_or_else(|| "not reported".to_string(), |tokens| tokens.to_string())
+    value.map_or_else(|| "未报告".to_string(), |tokens| tokens.to_string())
 }
 
 fn active_context_summary(app: &App) -> String {
@@ -21,7 +21,7 @@ fn active_context_summary(app: &App) -> String {
             let percent = (used as f64 / f64::from(window) * 100.0).clamp(0.0, 100.0);
             format!("~{used} / {window} ({percent:.1}%)")
         }
-        None => format!("~{estimated} / unknown window"),
+        None => format!("~{estimated} / 未知窗口"),
     }
 }
 
@@ -30,10 +30,10 @@ fn cache_summary(app: &App) -> String {
         app.last_prompt_cache_hit_tokens,
         app.last_prompt_cache_miss_tokens,
     ) {
-        (Some(hit), Some(miss)) => format!("{hit} hit / {miss} miss"),
-        (Some(hit), None) => format!("{hit} hit / miss not reported"),
-        (None, Some(miss)) => format!("hit not reported / {miss} miss"),
-        (None, None) => "not reported".to_string(),
+        (Some(hit), Some(miss)) => format!("{hit} 命中 / {miss} 未命中"),
+        (Some(hit), None) => format!("{hit} 命中 / 未命中未报告"),
+        (None, Some(miss)) => format!("命中未报告 / {miss} 未命中"),
+        (None, None) => "未报告".to_string(),
     }
 }
 
@@ -43,16 +43,16 @@ pub fn tokens(app: &mut App) -> CommandResult {
     let chat_count = app.history.len();
 
     CommandResult::message(format!(
-        "Token Usage:\n\
+        "Token 用量：\n\
          -----------------------------\n\
-         Active context:        {}\n\
-         Last API input:        {} (turn telemetry; may count repeated prefix across tool rounds)\n\
-         Last API output:       {}\n\
-         Cache hit/miss:        {} (telemetry only)\n\
-         Cumulative tokens:     {} (session usage telemetry)\n\
-         API messages:          {}\n\
-         Chat messages:         {}\n\
-         Model:                 {}",
+         当前上下文：        {}\n\
+         最近 API 输入：     {}（回合遥测；工具多轮时可能包含重复前缀）\n\
+         最近 API 输出：     {}\n\
+         缓存命中/未命中：   {}（仅遥测）\n\
+         累计 tokens：       {}（会话用量遥测）\n\
+         API 消息数：        {}\n\
+         聊天消息数：        {}\n\
+         模型：              {}",
         active_context_summary(app),
         token_count(app.last_prompt_tokens),
         token_count(app.last_completion_tokens),
@@ -67,13 +67,13 @@ pub fn tokens(app: &mut App) -> CommandResult {
 /// Show session token usage (legacy /cost alias).
 pub fn cost(app: &mut App) -> CommandResult {
     CommandResult::message(format!(
-        "Session Tokens:\n\
+        "会话 Token：\n\
          -----------------------------\n\
-         Cumulative tokens:     {}\n\
-         Last API input:        {}\n\
-         Last API output:       {}\n\
-         Active context:        {}\n\n\
-         Token usage is shown instead of dollar estimates in XiaomiMiMo-TUI.",
+         累计 tokens：       {}\n\
+         最近 API 输入：     {}\n\
+         最近 API 输出：     {}\n\
+         当前上下文：        {}\n\n\
+         XiaomiMiMo-TUI 这里显示 token 用量，不显示金额估算。",
         app.total_tokens,
         token_count(app.last_prompt_tokens),
         token_count(app.last_completion_tokens),
@@ -84,7 +84,7 @@ pub fn cost(app: &mut App) -> CommandResult {
 /// Show XiaomiMiMo prompt-cache telemetry for the latest completed turn.
 pub fn cache(app: &mut App, arg: Option<&str>) -> CommandResult {
     if arg.is_some_and(|s| !s.trim().is_empty() && s.trim() != "status") {
-        return CommandResult::error("Usage: /cache [status]");
+        return CommandResult::error("用法：/cache [status]");
     }
 
     let hit = app.last_prompt_cache_hit_tokens;
@@ -97,21 +97,21 @@ pub fn cache(app: &mut App, arg: Option<&str>) -> CommandResult {
         (Some(hit), Some(miss)) if hit + miss > 0 => {
             format!("{:.1}%", 100.0 * f64::from(hit) / f64::from(hit + miss))
         }
-        _ => "not reported".to_string(),
+        _ => "未报告".to_string(),
     };
     let replay = app
         .last_reasoning_replay_tokens
-        .map_or_else(|| "not reported".to_string(), |v| v.to_string());
+        .map_or_else(|| "未报告".to_string(), |v| v.to_string());
 
     CommandResult::message(format!(
-        "Prompt Cache (latest turn):\n\
+        "Prompt 缓存（最近一轮）：\n\
          -----------------------------\n\
-         Input tokens:          {}\n\
-         Output tokens:         {}\n\
-         Cache hit tokens:      {}\n\
-         Cache miss tokens:     {}\n\
-         Hit ratio:             {}\n\
-         Reasoning replay:      {}",
+         输入 tokens：       {}\n\
+         输出 tokens：       {}\n\
+         缓存命中 tokens：   {}\n\
+         缓存未命中 tokens： {}\n\
+         命中率：            {}\n\
+         推理重放：          {}",
         token_count(app.last_prompt_tokens),
         token_count(app.last_completion_tokens),
         token_count(hit),
@@ -130,7 +130,7 @@ pub fn system_prompt(app: &mut App) -> CommandResult {
             .map(|b| b.text.clone())
             .collect::<Vec<_>>()
             .join("\n\n---\n\n"),
-        None => "(no system prompt)".to_string(),
+        None => "（未设置系统提示词）".to_string(),
     };
 
     // Truncate if too long
@@ -142,7 +142,7 @@ pub fn system_prompt(app: &mut App) -> CommandResult {
             .last()
             .map_or(0, |(i, _)| i);
         format!(
-            "{}...\n\n(truncated, {} chars total)",
+            "{}...\n\n（已截断，共 {} 个字符）",
             &prompt_text[..truncate_at],
             prompt_text.len()
         )
@@ -151,7 +151,7 @@ pub fn system_prompt(app: &mut App) -> CommandResult {
     };
 
     CommandResult::message(format!(
-        "System Prompt ({} mode):\n─────────────────────────────\n{}",
+        "系统提示词（{} 模式）：\n─────────────────────────────\n{}",
         app.mode.label(),
         display
     ))
@@ -222,17 +222,17 @@ mod tests {
         let result = tokens(&mut app);
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("Token Usage"));
-        assert!(msg.contains("Active context:"));
-        assert!(msg.contains("Last API input:"));
-        assert!(msg.contains("Last API output:"));
-        assert!(msg.contains("Cache hit/miss:"));
-        assert!(msg.contains("70 hit / 30 miss"));
-        assert!(msg.contains("Cumulative tokens:"));
+        assert!(msg.contains("Token 用量"));
+        assert!(msg.contains("当前上下文"));
+        assert!(msg.contains("最近 API 输入"));
+        assert!(msg.contains("最近 API 输出"));
+        assert!(msg.contains("缓存命中/未命中"));
+        assert!(msg.contains("70 命中 / 30 未命中"));
+        assert!(msg.contains("累计 tokens"));
         assert!(!msg.contains("Approx session cost:"));
-        assert!(msg.contains("API messages:"));
-        assert!(msg.contains("Chat messages:"));
-        assert!(msg.contains("Model:"));
+        assert!(msg.contains("API 消息数"));
+        assert!(msg.contains("聊天消息数"));
+        assert!(msg.contains("模型"));
     }
 
     #[test]
@@ -242,9 +242,9 @@ mod tests {
         let result = cost(&mut app);
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("Session Tokens"));
-        assert!(msg.contains("Cumulative tokens:"));
-        assert!(msg.contains("Token usage"));
+        assert!(msg.contains("会话 Token"));
+        assert!(msg.contains("累计 tokens"));
+        assert!(msg.contains("token 用量"));
         assert!(!msg.contains("$"));
     }
 
@@ -259,7 +259,7 @@ mod tests {
 
         let result = cache(&mut app, None);
         let msg = result.message.expect("cache message");
-        assert!(msg.contains("Prompt Cache"));
+        assert!(msg.contains("Prompt 缓存"));
         assert!(msg.contains("70"));
         assert!(msg.contains("30"));
         assert!(msg.contains("70.0%"));
@@ -272,7 +272,7 @@ mod tests {
         let result = system_prompt(&mut app);
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("System Prompt"));
+        assert!(msg.contains("系统提示词"));
         assert!(msg.contains("Test system prompt"));
     }
 
@@ -294,7 +294,7 @@ mod tests {
         let result = system_prompt(&mut app);
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("System Prompt"));
+        assert!(msg.contains("系统提示词"));
         assert!(msg.contains("Block 1"));
         assert!(msg.contains("Block 2"));
     }
@@ -306,7 +306,7 @@ mod tests {
         let result = system_prompt(&mut app);
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("(no system prompt)"));
+        assert!(msg.contains("未设置系统提示词"));
     }
 
     #[test]
@@ -318,7 +318,7 @@ mod tests {
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
         assert!(msg.contains("..."));
-        assert!(msg.contains("chars total"));
+        assert!(msg.contains("个字符"));
     }
 
     #[test]
@@ -368,7 +368,7 @@ mod tests {
 
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("Removed"));
+        assert!(msg.contains("已移除"));
         assert!(app.history.len() < initial_history_len);
         assert!(app.api_messages.len() < initial_api_len);
     }
@@ -382,7 +382,7 @@ mod tests {
         let result = undo_conversation(&mut app);
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("Nothing to undo") || msg.contains("Removed"));
+        assert!(msg.contains("没有可撤销") || msg.contains("已移除"));
     }
 
     #[test]
@@ -406,7 +406,7 @@ mod tests {
 
         let result = patch_undo(&mut app);
         let msg = result.message.expect("undo message");
-        assert!(msg.contains("Restored snapshot"));
+        assert!(msg.contains("已恢复快照"));
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "old");
     }
 
@@ -424,7 +424,7 @@ mod tests {
         let result = retry(&mut app);
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("Retrying"));
+        assert!(msg.contains("正在重试"));
         assert!(msg.contains("Test message"));
         assert!(matches!(result.action, Some(AppAction::SendMessage(_))));
     }
@@ -435,7 +435,7 @@ mod tests {
         let result = retry(&mut app);
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("No previous request to retry"));
+        assert!(msg.contains("没有可重试"));
         assert!(result.action.is_none());
     }
 
@@ -454,7 +454,7 @@ mod tests {
         let result = retry(&mut app);
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("Retrying"));
+        assert!(msg.contains("正在重试"));
         assert!(msg.contains("..."));
     }
 }
@@ -488,9 +488,9 @@ pub fn undo_conversation(app: &mut App) -> CommandResult {
         app.exploring_entries.clear();
         app.ignored_tool_calls.clear();
         app.mark_history_updated();
-        CommandResult::message(format!("Removed {removed_count} message(s)"))
+        CommandResult::message(format!("已移除 {removed_count} 条消息"))
     } else {
-        CommandResult::message("Nothing to undo")
+        CommandResult::message("没有可撤销的内容")
     }
 }
 
@@ -501,7 +501,7 @@ pub fn patch_undo(app: &mut App) -> CommandResult {
         Ok(repo) => repo,
         Err(err) => {
             return CommandResult::error(format!(
-                "Snapshot repo unavailable for {}: {err}",
+                "快照仓库不可用（{}）：{err}",
                 workspace.display()
             ));
         }
@@ -509,10 +509,10 @@ pub fn patch_undo(app: &mut App) -> CommandResult {
 
     let snapshots = match repo.list(20) {
         Ok(snapshots) => snapshots,
-        Err(err) => return CommandResult::error(format!("Failed to list snapshots: {err}")),
+        Err(err) => return CommandResult::error(format!("列出快照失败：{err}")),
     };
     if snapshots.is_empty() {
-        return CommandResult::message("No snapshots found to undo; falling back unavailable.");
+        return CommandResult::message("未找到可撤销快照；无法使用快照回退。");
     }
 
     let target = snapshots
@@ -520,11 +520,11 @@ pub fn patch_undo(app: &mut App) -> CommandResult {
         .find(|s| s.label.starts_with("tool:"))
         .or_else(|| snapshots.iter().find(|s| s.label.starts_with("pre-turn:")));
     let Some(target) = target else {
-        return CommandResult::message("No tool or pre-turn snapshots found to undo.");
+        return CommandResult::message("未找到工具或回合前快照可撤销。");
     };
 
     if let Err(err) = repo.restore(&target.id) {
-        return CommandResult::error(format!("Restore failed: {err}"));
+        return CommandResult::error(format!("恢复失败：{err}"));
     }
 
     let diff_stat = std::process::Command::new("git")
@@ -540,20 +540,17 @@ pub fn patch_undo(app: &mut App) -> CommandResult {
     let short = &target.id.as_str()[..target.id.as_str().len().min(8)];
     let summary = match diff_stat {
         Some(stat) => format!(
-            "Restored snapshot '{}' ({}). Files affected:\n{stat}",
+            "已恢复快照 '{}'（{}）。受影响文件：\n{stat}",
             target.label, short
         ),
         None => format!(
-            "Restored snapshot '{}' ({}). No diff changes detected.",
+            "已恢复快照 '{}'（{}）。未检测到 diff 变化。",
             target.label, short
         ),
     };
 
     app.push_history_cell(HistoryCell::System {
-        content: format!(
-            "/undo reverted workspace to snapshot '{}' ({short})",
-            target.label
-        ),
+        content: format!("/undo 已将工作区恢复到快照 '{}'（{short}）", target.label),
     });
     CommandResult::message(summary)
 }
@@ -563,7 +560,7 @@ pub fn patch_undo(app: &mut App) -> CommandResult {
 pub fn undo(app: &mut App) -> CommandResult {
     let result = patch_undo(app);
     let fallback = result.message.as_deref().is_some_and(|msg| {
-        msg.starts_with("No snapshots") || msg.starts_with("No tool or pre-turn")
+        msg.starts_with("未找到可撤销快照") || msg.starts_with("未找到工具或回合前快照")
     });
     if fallback {
         undo_conversation(app)
@@ -593,10 +590,10 @@ pub fn retry(app: &mut App) -> CommandResult {
                 input.clone()
             };
             CommandResult::with_message_and_action(
-                format!("Retrying: {display_input}"),
+                format!("正在重试：{display_input}"),
                 AppAction::SendMessage(input),
             )
         }
-        None => CommandResult::error("No previous request to retry"),
+        None => CommandResult::error("没有可重试的上一条请求"),
     }
 }
