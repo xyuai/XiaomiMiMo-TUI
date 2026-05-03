@@ -35,6 +35,14 @@ pub fn show_config(_app: &mut App, arg: Option<&str>) -> CommandResult {
 /// - `/config` or `/config native`: open the native modal.
 /// - `/config <key>`: show the current runtime value.
 /// - `/config <key> <value>`: update the runtime value for this session.
+fn approval_setting(mode: ApprovalMode) -> &'static str {
+    match mode {
+        ApprovalMode::Auto => "auto",
+        ApprovalMode::Suggest => "suggest",
+        ApprovalMode::Never => "never",
+    }
+}
+
 pub fn config_command(app: &mut App, arg: Option<&str>) -> CommandResult {
     let raw = arg.map(str::trim).unwrap_or("");
     if raw.is_empty() {
@@ -83,7 +91,7 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
 
     let value = match key.as_str() {
         "model" => Some(app.model.clone()),
-        "approval_mode" | "approval" => Some(app.approval_mode.label().to_string()),
+        "approval_mode" | "approval" => Some(approval_setting(app.approval_mode).to_string()),
         "locale" | "language" => Some(locale_display(app.ui_locale).to_string()),
         "auto_compact" | "compact" => Some(app.auto_compact.to_string()),
         "calm_mode" | "calm" => Some(app.calm_mode.to_string()),
@@ -227,7 +235,16 @@ pub fn profile(app: &mut App, arg: Option<&str>) -> CommandResult {
             "Usage: /profile <name>\nLoads [profiles.<name>] for this session. Some settings still require restart.",
         );
     };
-    let cfg = match Config::load(None, Some(name)) {
+    let config_path = match config_toml_path() {
+        Ok(path) => path,
+        Err(err) => return CommandResult::error(format!("Failed to resolve config path: {err}")),
+    };
+    if !config_path.exists() {
+        return CommandResult::error(format!(
+            "Profile '{name}' not found. Available profiles: none"
+        ));
+    }
+    let cfg = match Config::load(Some(config_path), Some(name)) {
         Ok(cfg) => cfg,
         Err(err) => return CommandResult::error(format!("{err}")),
     };
@@ -394,7 +411,7 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                 Some(m) => {
                     app.approval_mode = m;
                     CommandResult::with_message_and_action(
-                        format!("approval_mode = {}", m.label()),
+                        format!("approval_mode = {}", approval_setting(m)),
                         sync_mode_permissions_action(app),
                     )
                 }

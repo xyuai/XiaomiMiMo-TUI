@@ -257,7 +257,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         name: "config",
         aliases: &[],
-        description: "Open or update configuration",
+        description: "Open interactive configuration editor or update settings",
         usage: "/config [key [value]|native]",
     },
     CommandInfo {
@@ -852,7 +852,8 @@ mod tests {
 
     #[test]
     fn execute_lsp_cache_and_profile_dispatch() {
-        let mut app = create_test_app();
+        let tmpdir = TempDir::new().expect("tempdir");
+        let mut app = create_test_app_in(&tmpdir);
         let lsp = execute("/lsp status", &mut app)
             .message
             .expect("lsp status message");
