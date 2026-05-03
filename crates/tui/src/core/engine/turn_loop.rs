@@ -1329,6 +1329,15 @@ impl Engine {
                         (None, None)
                     };
 
+                    if result_override.is_none() && tool_may_modify_files(&tool_name, &tool_input) {
+                        let ws = self.session.workspace.clone();
+                        let snapshot_id = tool_id.clone();
+                        let _ = tokio::task::spawn_blocking(move || {
+                            pre_tool_snapshot(&ws, &snapshot_id)
+                        })
+                        .await;
+                    }
+
                     let started_at = Instant::now();
                     let result = if let Some(result_override) = result_override {
                         result_override

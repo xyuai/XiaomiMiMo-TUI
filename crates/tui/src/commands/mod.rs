@@ -257,8 +257,20 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         name: "config",
         aliases: &[],
-        description: "Open interactive configuration editor",
-        usage: "/config",
+        description: "Open or update configuration",
+        usage: "/config [key [value]|native]",
+    },
+    CommandInfo {
+        name: "lsp",
+        aliases: &[],
+        description: "Show or update LSP diagnostics startup setting",
+        usage: "/lsp [status|on|off]",
+    },
+    CommandInfo {
+        name: "profile",
+        aliases: &[],
+        description: "Apply a named config profile to the current session",
+        usage: "/profile <name>",
     },
     CommandInfo {
         name: "yolo",
@@ -296,6 +308,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &[],
         description: "Show token usage for session",
         usage: "/tokens",
+    },
+    CommandInfo {
+        name: "cache",
+        aliases: &[],
+        description: "Show prompt-cache telemetry for the latest turn",
+        usage: "/cache [status]",
     },
     CommandInfo {
         name: "system",
@@ -391,6 +409,8 @@ fn smoke_test_invocation(command: &CommandInfo) -> String {
         "task" => "/task list",
         "jobs" => "/jobs list",
         "mcp" => "/mcp status",
+        "lsp" => "/lsp status",
+        "profile" => "/profile missing-smoke-profile",
         "save" => "/save slash_command_smoke_session.json",
         "load" => "/load missing-smoke-test-session.json",
         "cycle" => "/cycle 1",
@@ -449,7 +469,9 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "export" => session::export(app, arg),
 
         // Config commands
-        "config" => config::show_config(app),
+        "config" => config::config_command(app, arg),
+        "lsp" => config::lsp_command(app, arg),
+        "profile" => config::profile(app, arg),
         "settings" => config::show_settings(app),
         "statusline" | "status" => config::status_line(app),
         "yolo" => config::yolo(app),
@@ -461,6 +483,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         // Debug commands
         "tokens" => debug::tokens(app),
         "cost" => debug::cost(app),
+        "cache" => debug::cache(app, arg),
         "system" => debug::system_prompt(app),
         "context" | "ctx" => debug::context(app),
         "undo" => debug::undo(app),
@@ -812,6 +835,39 @@ mod tests {
         let result = execute("/config", &mut app);
         assert!(result.message.is_none());
         assert!(matches!(result.action, Some(AppAction::OpenConfigView)));
+    }
+
+    #[test]
+    fn execute_config_can_show_and_set_runtime_values() {
+        let mut app = create_test_app();
+        let result = execute("/config model", &mut app);
+        let msg = result.message.expect("config key should return value");
+        assert!(msg.contains("model ="));
+
+        let result = execute("/config approval never", &mut app);
+        let msg = result.message.expect("config set should return value");
+        assert!(msg.contains("approval_mode"));
+        assert!(msg.contains("never"));
+    }
+
+    #[test]
+    fn execute_lsp_cache_and_profile_dispatch() {
+        let mut app = create_test_app();
+        let lsp = execute("/lsp status", &mut app)
+            .message
+            .expect("lsp status message");
+        assert!(lsp.contains("LSP diagnostics"));
+
+        app.last_prompt_tokens = Some(10);
+        app.last_prompt_cache_hit_tokens = Some(7);
+        app.last_prompt_cache_miss_tokens = Some(3);
+        let cache = execute("/cache", &mut app).message.expect("cache message");
+        assert!(cache.contains("Prompt Cache"));
+
+        let profile = execute("/profile definitely-missing-profile", &mut app)
+            .message
+            .expect("profile error message");
+        assert!(profile.contains("Error:"));
     }
 
     #[test]

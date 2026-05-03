@@ -138,7 +138,7 @@ impl Settings {
         }
 
         let content = toml::to_string_pretty(self).context("Failed to serialize settings")?;
-        std::fs::write(&path, content)
+        crate::utils::write_atomic(&path, content.as_bytes())
             .with_context(|| format!("Failed to write settings to {}", path.display()))?;
         Ok(())
     }

@@ -787,9 +787,13 @@ impl TaskManager {
 
         for _ in 0..workers {
             let manager_clone = Arc::clone(&manager);
-            tokio::spawn(async move {
-                manager_clone.worker_loop().await;
-            });
+            crate::utils::spawn_supervised(
+                "task-manager-worker",
+                std::panic::Location::caller(),
+                async move {
+                    manager_clone.worker_loop().await;
+                },
+            );
         }
 
         Ok(manager)

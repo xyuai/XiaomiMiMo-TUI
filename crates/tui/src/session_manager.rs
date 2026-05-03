@@ -144,18 +144,14 @@ impl SessionManager {
         Self::new(default_sessions_dir()?)
     }
 
-    /// Save a session to disk using atomic write (temp file + rename).
+    /// Save a session to disk using atomic write.
     pub fn save_session(&self, session: &SavedSession) -> std::io::Result<PathBuf> {
         let path = self.validated_session_path(&session.metadata.id)?;
 
         let content = serde_json::to_string_pretty(session)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
-        // Atomic write: write to temp file then rename to avoid corruption
-        let tmp_filename = format!(".{}.tmp", session.metadata.id.trim());
-        let tmp_path = self.sessions_dir.join(&tmp_filename);
-        fs::write(&tmp_path, &content)?;
-        fs::rename(&tmp_path, &path)?;
+        crate::utils::write_atomic(&path, content.as_bytes())?;
 
         // Clean up old sessions if we have too many
         self.cleanup_old_sessions()?;
@@ -170,9 +166,7 @@ impl SessionManager {
         let path = checkpoints.join("latest.json");
         let content = serde_json::to_string_pretty(session)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        let tmp_path = checkpoints.join(".latest.tmp");
-        fs::write(&tmp_path, &content)?;
-        fs::rename(&tmp_path, &path)?;
+        crate::utils::write_atomic(&path, content.as_bytes())?;
         Ok(path)
     }
 
@@ -214,9 +208,7 @@ impl SessionManager {
         let path = checkpoints.join("offline_queue.json");
         let content = serde_json::to_string_pretty(state)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        let tmp_path = checkpoints.join(".offline_queue.tmp");
-        fs::write(&tmp_path, &content)?;
-        fs::rename(&tmp_path, &path)?;
+        crate::utils::write_atomic(&path, content.as_bytes())?;
         Ok(path)
     }
 

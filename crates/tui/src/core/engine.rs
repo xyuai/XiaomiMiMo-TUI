@@ -64,7 +64,9 @@ use super::events::{Event, TurnOutcomeStatus};
 use super::ops::Op;
 use super::session::Session;
 use super::tool_parser;
-use super::turn::{TurnContext, TurnToolCall, post_turn_snapshot, pre_turn_snapshot};
+use super::turn::{
+    TurnContext, TurnToolCall, post_turn_snapshot, pre_tool_snapshot, pre_turn_snapshot,
+};
 
 // === Types ===
 
@@ -920,6 +922,11 @@ fn edited_paths_for_tool(tool_name: &str, input: &serde_json::Value) -> Vec<Path
         }
         _ => Vec::new(),
     }
+}
+
+fn tool_may_modify_files(tool_name: &str, input: &serde_json::Value) -> bool {
+    matches!(tool_name, "edit_file" | "write_file" | "apply_patch")
+        || !edited_paths_for_tool(tool_name, input).is_empty()
 }
 
 /// Lightweight parser for `+++ b/<path>` lines in a unified diff. Used as a
@@ -1805,20 +1812,24 @@ impl Engine {
             let cancel_token = self.cancel_token.child_token();
             let (mailbox, mut receiver) = Mailbox::new(cancel_token.clone());
             let tx_event_clone = self.tx_event.clone();
-            tokio::spawn(async move {
-                while let Some(envelope) = receiver.recv().await {
-                    if tx_event_clone
-                        .send(Event::SubAgentMailbox {
-                            seq: envelope.seq,
-                            message: envelope.message,
-                        })
-                        .await
-                        .is_err()
-                    {
-                        break;
+            crate::utils::spawn_supervised(
+                "subagent-mailbox-drainer",
+                std::panic::Location::caller(),
+                async move {
+                    while let Some(envelope) = receiver.recv().await {
+                        if tx_event_clone
+                            .send(Event::SubAgentMailbox {
+                                seq: envelope.seq,
+                                message: envelope.message,
+                            })
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
                     }
-                }
-            });
+                },
+            );
             Some((mailbox, cancel_token))
         } else {
             None
@@ -2843,9 +2854,13 @@ impl Engine {
 pub fn spawn_engine(config: EngineConfig, api_config: &Config) -> EngineHandle {
     let (engine, handle) = Engine::new(config, api_config);
 
-    tokio::spawn(async move {
-        engine.run().await;
-    });
+    crate::utils::spawn_supervised(
+        "engine",
+        std::panic::Location::caller(),
+        async move {
+            engine.run().await;
+        },
+    );
 
     handle
 }

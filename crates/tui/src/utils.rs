@@ -1,6 +1,7 @@
 //! Utility helpers shared across the `XiaomiMiMo` CLI.
 
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 
 use crate::models::{ContentBlock, Message};
@@ -89,6 +90,24 @@ pub fn summarize_project(root: &Path) -> String {
     }
 }
 
+/// Render a path for user-facing display with the home directory contracted
+/// to `~`. Do not use this for persisted paths or model-visible paths.
+#[must_use]
+#[allow(dead_code)]
+pub fn display_path(path: &Path) -> String {
+    let Some(home) = dirs::home_dir() else {
+        return path.display().to_string();
+    };
+    if let Ok(rest) = path.strip_prefix(&home) {
+        if rest.as_os_str().is_empty() {
+            return "~".to_string();
+        }
+        let sep = std::path::MAIN_SEPARATOR;
+        return format!("~{sep}{}", rest.display());
+    }
+    path.display().to_string()
+}
+
 /// Generate a tree-like view of the project structure.
 #[must_use]
 pub fn project_tree(root: &Path, max_depth: usize) -> String {
@@ -134,6 +153,86 @@ pub fn project_tree(root: &Path, max_depth: usize) -> String {
 }
 
 // === Filesystem Helpers ===
+
+/// Atomically write `contents` to `path` using a same-directory temporary file,
+/// fsync, and rename. Readers see either the previous complete file or the new
+/// complete file, never a partially-written config/session.
+pub fn write_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("path has no parent directory: {}", path.display()),
+        )
+    })?;
+    std::fs::create_dir_all(parent)?;
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+    tmp.write_all(contents)?;
+    tmp.as_file().sync_all()?;
+    tmp.persist(path).map_err(|err| err.error)?;
+    // Best effort: fsync the directory entry on platforms that allow opening
+    // directories as files. Windows often rejects this, so ignore failures.
+    let _ = std::fs::File::open(parent).and_then(|dir| dir.sync_all());
+    Ok(())
+}
+
+/// Spawn a tokio task with panic supervision. The panic is logged and a
+/// best-effort crash dump is written under `~/.xiaomimimo/crashes/` so a
+/// background task panic does not silently disappear.
+pub fn spawn_supervised<F>(
+    name: &'static str,
+    location: &'static std::panic::Location<'static>,
+    future: F,
+) -> tokio::task::JoinHandle<()>
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    tokio::spawn(async move {
+        use futures_util::FutureExt;
+        let result = std::panic::AssertUnwindSafe(future).catch_unwind().await;
+        if let Err(panic_info) = result {
+            let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown panic".to_string()
+            };
+            tracing::error!(
+                target: "panic",
+                "Task '{name}' panicked at {}: {msg}",
+                location,
+            );
+            let _ = write_panic_dump(name, location, &msg);
+        }
+    })
+}
+
+fn write_panic_dump(
+    name: &str,
+    location: &std::panic::Location<'_>,
+    message: &str,
+) -> std::io::Result<()> {
+    let home = dirs::home_dir().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "home directory not found")
+    })?;
+    let crash_dir = home.join(".xiaomimimo").join("crashes");
+    std::fs::create_dir_all(&crash_dir)?;
+    let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
+    let safe_name: String = name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let path = crash_dir.join(format!("{timestamp}-{safe_name}.log"));
+    let contents =
+        format!("Task: {name}\nLocation: {location}\nTimestamp: {timestamp}\nPanic: {message}\n");
+    write_atomic(&path, contents.as_bytes())
+}
 
 #[allow(dead_code)]
 pub fn ensure_dir(path: &Path) -> Result<()> {
@@ -204,4 +303,19 @@ pub fn estimate_message_chars(messages: &[Message]) -> usize {
         }
     }
     total
+}
+
+#[cfg(test)]
+mod tests {
+    use super::write_atomic;
+
+    #[test]
+    fn write_atomic_creates_and_replaces_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("state.json");
+        write_atomic(&path, b"old").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "old");
+        write_atomic(&path, b"new").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+    }
 }

@@ -43,6 +43,7 @@ pub fn default_skills_dir() -> PathBuf {
 pub struct Skill {
     pub name: String,
     pub description: String,
+    pub path: PathBuf,
     pub body: String,
 }
 
@@ -70,7 +71,10 @@ impl SkillRegistry {
                     let skill_path = entry.path().join("SKILL.md");
                     match fs::read_to_string(&skill_path) {
                         Ok(content) => match Self::parse_skill(&skill_path, &content) {
-                            Ok(skill) => registry.skills.push(skill),
+                            Ok(mut skill) => {
+                                skill.path = skill_path.clone();
+                                registry.skills.push(skill);
+                            }
                             Err(reason) => registry.push_warning(format!(
                                 "Failed to parse {}: {reason}",
                                 skill_path.display()
@@ -97,7 +101,7 @@ impl SkillRegistry {
         self.warnings.push(warning);
     }
 
-    fn parse_skill(_path: &Path, content: &str) -> std::result::Result<Skill, String> {
+    fn parse_skill(path: &Path, content: &str) -> std::result::Result<Skill, String> {
         let trimmed = content.trim_start();
         let (frontmatter, body) = if trimmed.starts_with("---") {
             let start = content
@@ -136,6 +140,7 @@ impl SkillRegistry {
         Ok(Skill {
             name,
             description,
+            path: path.to_path_buf(),
             body,
         })
     }
@@ -196,7 +201,7 @@ instructions when using a specific skill.\n\n",
 
     let mut omitted = 0usize;
     for skill in skills {
-        let path = skills_dir.join(&skill.name).join("SKILL.md");
+        let path = skill.path.clone();
         let description = truncate_for_prompt(&skill.description, MAX_SKILL_DESCRIPTION_CHARS);
         let line = if description.is_empty() {
             format!("- {}: (file: {})\n", skill.name, path.display())
@@ -334,6 +339,38 @@ mod tests {
             "expected path {expected_path:?} not in rendered output"
         );
         assert!(rendered.contains("### How to use skills"));
+    }
+
+    #[test]
+    fn render_available_skills_context_uses_real_dir_name_not_frontmatter_name() {
+        let tmpdir = TempDir::new().unwrap();
+        create_skill_dir(
+            &tmpdir,
+            "actual-dir",
+            "---\nname: display-name\ndescription: A test skill\n---\nbody",
+        );
+
+        let rendered =
+            crate::skills::render_available_skills_context(&tmpdir.path().join("skills"))
+                .expect("skill context");
+        let real_path = tmpdir
+            .path()
+            .join("skills")
+            .join("actual-dir")
+            .join("SKILL.md")
+            .display()
+            .to_string();
+        let fake_path = tmpdir
+            .path()
+            .join("skills")
+            .join("display-name")
+            .join("SKILL.md")
+            .display()
+            .to_string();
+
+        assert!(rendered.contains("- display-name: A test skill"));
+        assert!(rendered.contains(&real_path), "got:\n{rendered}");
+        assert!(!rendered.contains(&fake_path), "got:\n{rendered}");
     }
 
     #[test]

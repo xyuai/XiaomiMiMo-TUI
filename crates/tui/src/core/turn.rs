@@ -136,6 +136,13 @@ pub fn pre_turn_snapshot(workspace: &Path, turn_seq: u64) -> Option<String> {
     snapshot_with_label(workspace, &format!("pre-turn:{turn_seq}"))
 }
 
+/// Take a `tool:<call_id>` workspace snapshot before executing a
+/// file-modifying tool call. This gives `/undo` a surgical restore point even
+/// when coarse pre/post-turn snapshots are disabled.
+pub fn pre_tool_snapshot(workspace: &Path, call_id: &str) -> Option<String> {
+    snapshot_with_label(workspace, &format!("tool:{call_id}"))
+}
+
 /// Take a `post-turn:<seq>` workspace snapshot. Same failure model as
 /// [`pre_turn_snapshot`].
 pub fn post_turn_snapshot(workspace: &Path, turn_seq: u64) -> Option<String> {

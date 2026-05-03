@@ -819,29 +819,33 @@ pub fn spawn_scheduler(
     cancel: CancellationToken,
     config: AutomationSchedulerConfig,
 ) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let interval = config.tick_interval_secs.max(5);
-        loop {
-            if cancel.is_cancelled() {
-                break;
-            }
-
-            {
-                let manager = automations.lock().await;
-                if let Err(err) = manager.scheduler_tick(&task_manager).await {
-                    tracing::warn!("automation scheduler tick failed: {err}");
+    crate::utils::spawn_supervised(
+        "automation-scheduler",
+        std::panic::Location::caller(),
+        async move {
+            let interval = config.tick_interval_secs.max(5);
+            loop {
+                if cancel.is_cancelled() {
+                    break;
                 }
-                if let Err(err) = manager.reconcile_run_statuses(&task_manager).await {
-                    tracing::warn!("automation reconcile failed: {err}");
+
+                {
+                    let manager = automations.lock().await;
+                    if let Err(err) = manager.scheduler_tick(&task_manager).await {
+                        tracing::warn!("automation scheduler tick failed: {err}");
+                    }
+                    if let Err(err) = manager.reconcile_run_statuses(&task_manager).await {
+                        tracing::warn!("automation reconcile failed: {err}");
+                    }
+                }
+
+                tokio::select! {
+                    _ = cancel.cancelled() => break,
+                    _ = sleep(std::time::Duration::from_secs(interval)) => {}
                 }
             }
-
-            tokio::select! {
-                _ = cancel.cancelled() => break,
-                _ = sleep(std::time::Duration::from_secs(interval)) => {}
-            }
-        }
-    })
+        },
+    )
 }
 
 #[cfg(test)]

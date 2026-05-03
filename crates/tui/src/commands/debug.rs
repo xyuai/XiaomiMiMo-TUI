@@ -81,6 +81,46 @@ pub fn cost(app: &mut App) -> CommandResult {
     ))
 }
 
+/// Show XiaomiMiMo prompt-cache telemetry for the latest completed turn.
+pub fn cache(app: &mut App, arg: Option<&str>) -> CommandResult {
+    if arg.is_some_and(|s| !s.trim().is_empty() && s.trim() != "status") {
+        return CommandResult::error("Usage: /cache [status]");
+    }
+
+    let hit = app.last_prompt_cache_hit_tokens;
+    let miss = app.last_prompt_cache_miss_tokens.or_else(|| {
+        app.last_prompt_tokens
+            .zip(hit)
+            .map(|(input, hit)| input.saturating_sub(hit))
+    });
+    let ratio = match (hit, miss) {
+        (Some(hit), Some(miss)) if hit + miss > 0 => {
+            format!("{:.1}%", 100.0 * f64::from(hit) / f64::from(hit + miss))
+        }
+        _ => "not reported".to_string(),
+    };
+    let replay = app
+        .last_reasoning_replay_tokens
+        .map_or_else(|| "not reported".to_string(), |v| v.to_string());
+
+    CommandResult::message(format!(
+        "Prompt Cache (latest turn):\n\
+         -----------------------------\n\
+         Input tokens:          {}\n\
+         Output tokens:         {}\n\
+         Cache hit tokens:      {}\n\
+         Cache miss tokens:     {}\n\
+         Hit ratio:             {}\n\
+         Reasoning replay:      {}",
+        token_count(app.last_prompt_tokens),
+        token_count(app.last_completion_tokens),
+        token_count(hit),
+        token_count(miss),
+        ratio,
+        replay,
+    ))
+}
+
 /// Show current system prompt
 pub fn system_prompt(app: &mut App) -> CommandResult {
     let prompt_text = match &app.system_prompt {
@@ -131,9 +171,16 @@ mod tests {
     use std::path::PathBuf;
 
     fn create_test_app() -> App {
-        let options = TuiOptions {
+        App::new(
+            test_options_for_workspace(PathBuf::from("/tmp/test-workspace")),
+            &Config::default(),
+        )
+    }
+
+    fn test_options_for_workspace(workspace: PathBuf) -> TuiOptions {
+        TuiOptions {
             model: "mimo-v2.5-pro".to_string(),
-            workspace: PathBuf::from("/tmp/test-workspace"),
+            workspace,
             workspace_explicit: true,
             allow_shell: false,
             use_alt_screen: true,
@@ -149,8 +196,7 @@ mod tests {
             skip_onboarding: true,
             yolo: false,
             resume_session_id: None,
-        };
-        App::new(options, &Config::default())
+        }
     }
 
     #[test]
@@ -200,6 +246,23 @@ mod tests {
         assert!(msg.contains("Cumulative tokens:"));
         assert!(msg.contains("Token usage"));
         assert!(!msg.contains("$"));
+    }
+
+    #[test]
+    fn test_cache_shows_latest_turn_telemetry() {
+        let mut app = create_test_app();
+        app.last_prompt_tokens = Some(100);
+        app.last_completion_tokens = Some(20);
+        app.last_prompt_cache_hit_tokens = Some(70);
+        app.last_prompt_cache_miss_tokens = Some(30);
+        app.last_reasoning_replay_tokens = Some(5);
+
+        let result = cache(&mut app, None);
+        let msg = result.message.expect("cache message");
+        assert!(msg.contains("Prompt Cache"));
+        assert!(msg.contains("70"));
+        assert!(msg.contains("30"));
+        assert!(msg.contains("70.0%"));
     }
 
     #[test]
@@ -301,7 +364,7 @@ mod tests {
 
         let initial_history_len = app.history.len();
         let initial_api_len = app.api_messages.len();
-        let result = undo(&mut app);
+        let result = undo_conversation(&mut app);
 
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
@@ -316,10 +379,35 @@ mod tests {
         // Clear any default history
         app.history.clear();
         app.api_messages.clear();
-        let result = undo(&mut app);
+        let result = undo_conversation(&mut app);
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
         assert!(msg.contains("Nothing to undo") || msg.contains("Removed"));
+    }
+
+    #[test]
+    fn patch_undo_restores_latest_tool_snapshot() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path();
+        std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(workspace)
+            .status()
+            .expect("git init");
+
+        let mut app = App::new(
+            test_options_for_workspace(workspace.to_path_buf()),
+            &Config::default(),
+        );
+        let file = workspace.join("file.txt");
+        std::fs::write(&file, "old").unwrap();
+        crate::core::turn::pre_tool_snapshot(workspace, "test-call").expect("snapshot");
+        std::fs::write(&file, "new").unwrap();
+
+        let result = patch_undo(&mut app);
+        let msg = result.message.expect("undo message");
+        assert!(msg.contains("Restored snapshot"));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "old");
     }
 
     #[test]
@@ -371,8 +459,8 @@ mod tests {
     }
 }
 
-/// Remove last message pair (user + assistant)
-pub fn undo(app: &mut App) -> CommandResult {
+/// Remove last message pair (user + assistant).
+pub fn undo_conversation(app: &mut App) -> CommandResult {
     // Remove from display history (up to the last user message)
     let mut removed_count = 0;
     while !app.history.is_empty() {
@@ -403,6 +491,84 @@ pub fn undo(app: &mut App) -> CommandResult {
         CommandResult::message(format!("Removed {removed_count} message(s)"))
     } else {
         CommandResult::message("Nothing to undo")
+    }
+}
+
+/// Revert the most recent file-modifying tool snapshot if available.
+pub fn patch_undo(app: &mut App) -> CommandResult {
+    let workspace = app.workspace.clone();
+    let repo = match crate::snapshot::SnapshotRepo::open_or_init(&workspace) {
+        Ok(repo) => repo,
+        Err(err) => {
+            return CommandResult::error(format!(
+                "Snapshot repo unavailable for {}: {err}",
+                workspace.display()
+            ));
+        }
+    };
+
+    let snapshots = match repo.list(20) {
+        Ok(snapshots) => snapshots,
+        Err(err) => return CommandResult::error(format!("Failed to list snapshots: {err}")),
+    };
+    if snapshots.is_empty() {
+        return CommandResult::message("No snapshots found to undo; falling back unavailable.");
+    }
+
+    let target = snapshots
+        .iter()
+        .find(|s| s.label.starts_with("tool:"))
+        .or_else(|| snapshots.iter().find(|s| s.label.starts_with("pre-turn:")));
+    let Some(target) = target else {
+        return CommandResult::message("No tool or pre-turn snapshots found to undo.");
+    };
+
+    if let Err(err) = repo.restore(&target.id) {
+        return CommandResult::error(format!("Restore failed: {err}"));
+    }
+
+    let diff_stat = std::process::Command::new("git")
+        .args(["diff", "--stat"])
+        .current_dir(&workspace)
+        .output()
+        .ok()
+        .and_then(|out| {
+            let stat = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            (!stat.is_empty()).then_some(stat)
+        });
+
+    let short = &target.id.as_str()[..target.id.as_str().len().min(8)];
+    let summary = match diff_stat {
+        Some(stat) => format!(
+            "Restored snapshot '{}' ({}). Files affected:\n{stat}",
+            target.label, short
+        ),
+        None => format!(
+            "Restored snapshot '{}' ({}). No diff changes detected.",
+            target.label, short
+        ),
+    };
+
+    app.push_history_cell(HistoryCell::System {
+        content: format!(
+            "/undo reverted workspace to snapshot '{}' ({short})",
+            target.label
+        ),
+    });
+    CommandResult::message(summary)
+}
+
+/// Prefer patch-aware undo for recent file writes; fall back to conversation
+/// undo when no snapshots exist.
+pub fn undo(app: &mut App) -> CommandResult {
+    let result = patch_undo(app);
+    let fallback = result.message.as_deref().is_some_and(|msg| {
+        msg.starts_with("No snapshots") || msg.starts_with("No tool or pre-turn")
+    });
+    if fallback {
+        undo_conversation(app)
+    } else {
+        result
     }
 }
 

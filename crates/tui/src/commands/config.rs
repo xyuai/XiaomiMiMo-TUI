@@ -3,15 +3,124 @@
 use std::path::{Path, PathBuf};
 
 use super::CommandResult;
-use crate::config::{COMMON_XIAOMIMIMO_MODELS, clear_api_key, normalize_model_name};
+use crate::config::{COMMON_XIAOMIMIMO_MODELS, Config, clear_api_key, normalize_model_name};
 use crate::localization::resolve_locale;
 use crate::settings::Settings;
-use crate::tui::app::{App, AppAction, AppMode, OnboardingState, SidebarFocus};
+use crate::tui::app::{App, AppAction, AppMode, OnboardingState, ReasoningEffort, SidebarFocus};
 use crate::tui::approval::ApprovalMode;
 
 /// Open the interactive config editor modal.
-pub fn show_config(_app: &mut App) -> CommandResult {
+pub fn show_config(_app: &mut App, arg: Option<&str>) -> CommandResult {
+    if let Some(mode) = arg.map(str::trim).filter(|s| !s.is_empty()) {
+        match mode.to_ascii_lowercase().as_str() {
+            "native" => {}
+            "tui" | "web" => {
+                return CommandResult::with_message_and_action(
+                    "This XiaomiMiMo build keeps the native config modal only; opening /config.",
+                    AppAction::OpenConfigView,
+                );
+            }
+            other => {
+                return CommandResult::error(format!(
+                    "Unknown config editor mode '{other}'. Use: /config, /config native, or /config <key> [value]."
+                ));
+            }
+        }
+    }
     CommandResult::action(AppAction::OpenConfigView)
+}
+
+/// Dispatch `/config` with optional args.
+///
+/// - `/config` or `/config native`: open the native modal.
+/// - `/config <key>`: show the current runtime value.
+/// - `/config <key> <value>`: update the runtime value for this session.
+pub fn config_command(app: &mut App, arg: Option<&str>) -> CommandResult {
+    let raw = arg.map(str::trim).unwrap_or("");
+    if raw.is_empty() {
+        return show_config(app, None);
+    }
+
+    let parts: Vec<&str> = raw.splitn(2, ' ').collect();
+    if parts.len() == 1 {
+        let token = parts[0];
+        if matches!(
+            token.to_ascii_lowercase().as_str(),
+            "native" | "tui" | "web"
+        ) {
+            return show_config(app, Some(token));
+        }
+        return show_single_setting(app, token);
+    }
+
+    set_config_value(app, parts[0], parts[1].trim(), false)
+}
+
+fn show_single_setting(app: &App, key: &str) -> CommandResult {
+    let key = key.to_ascii_lowercase();
+    fn locale_display(l: crate::localization::Locale) -> &'static str {
+        match l {
+            crate::localization::Locale::En => "en",
+            crate::localization::Locale::ZhHans => "zh-Hans",
+            crate::localization::Locale::Ja => "ja",
+            crate::localization::Locale::PtBr => "pt-BR",
+        }
+    }
+    fn density_display(d: crate::tui::app::ComposerDensity) -> &'static str {
+        match d {
+            crate::tui::app::ComposerDensity::Compact => "compact",
+            crate::tui::app::ComposerDensity::Comfortable => "comfortable",
+            crate::tui::app::ComposerDensity::Spacious => "spacious",
+        }
+    }
+    fn spacing_display(s: crate::tui::app::TranscriptSpacing) -> &'static str {
+        match s {
+            crate::tui::app::TranscriptSpacing::Compact => "compact",
+            crate::tui::app::TranscriptSpacing::Comfortable => "comfortable",
+            crate::tui::app::TranscriptSpacing::Spacious => "spacious",
+        }
+    }
+
+    let value = match key.as_str() {
+        "model" => Some(app.model.clone()),
+        "approval_mode" | "approval" => Some(app.approval_mode.label().to_string()),
+        "locale" | "language" => Some(locale_display(app.ui_locale).to_string()),
+        "auto_compact" | "compact" => Some(app.auto_compact.to_string()),
+        "calm_mode" | "calm" => Some(app.calm_mode.to_string()),
+        "low_motion" | "motion" => Some(app.low_motion.to_string()),
+        "show_thinking" | "thinking" => Some(app.show_thinking.to_string()),
+        "show_tool_details" | "tool_details" => Some(app.show_tool_details.to_string()),
+        "mode" | "default_mode" => Some(app.mode.as_setting().to_string()),
+        "max_history" | "history" => Some(app.max_input_history.to_string()),
+        "sidebar_width" | "sidebar" => Some(app.sidebar_width_percent.to_string()),
+        "sidebar_focus" | "focus" => Some(app.sidebar_focus.as_setting().to_string()),
+        "composer_density" | "composer" => Some(density_display(app.composer_density).to_string()),
+        "composer_border" | "border" => Some(app.composer_border.to_string()),
+        "transcript_spacing" | "spacing" => {
+            Some(spacing_display(app.transcript_spacing).to_string())
+        }
+        "mcp_config_path" | "mcp" => Some(app.mcp_config_path.display().to_string()),
+        "reasoning_effort" | "thinking_effort" | "effort" => {
+            Some(app.reasoning_effort.as_setting().to_string())
+        }
+        _ => {
+            if Settings::available_settings()
+                .iter()
+                .any(|(known, _)| *known == key)
+            {
+                Some("(see /settings for persisted value)".to_string())
+            } else {
+                None
+            }
+        }
+    };
+
+    match value {
+        Some(v) => CommandResult::message(format!("{key} = {v}")),
+        None => CommandResult::error(format!(
+            "Unknown setting '{key}'. Use `/settings` to inspect persistent settings."
+        )),
+    }
 }
 
 /// Show persistent settings
@@ -20,6 +129,134 @@ pub fn show_settings(_app: &mut App) -> CommandResult {
         Ok(settings) => CommandResult::message(settings.display()),
         Err(e) => CommandResult::error(format!("Failed to load settings: {e}")),
     }
+}
+
+/// Manage startup LSP diagnostics config.
+pub fn lsp_command(_app: &mut App, arg: Option<&str>) -> CommandResult {
+    let raw = arg
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("status");
+    match raw.to_ascii_lowercase().as_str() {
+        "status" | "show" => match load_lsp_enabled() {
+            Ok((enabled, path)) => CommandResult::message(format!(
+                "LSP diagnostics: {} (config: {}). Runtime manager reads this at startup.",
+                if enabled { "enabled" } else { "disabled" },
+                path.display()
+            )),
+            Err(err) => CommandResult::error(format!("Failed to read LSP config: {err}")),
+        },
+        "on" | "enable" | "enabled" => persist_lsp_enabled(true),
+        "off" | "disable" | "disabled" => persist_lsp_enabled(false),
+        _ => CommandResult::error("Usage: /lsp [status|on|off]"),
+    }
+}
+
+fn load_lsp_enabled() -> anyhow::Result<(bool, PathBuf)> {
+    use anyhow::Context;
+    use std::fs;
+    let path = config_toml_path()?;
+    if !path.exists() {
+        return Ok((crate::lsp::LspConfig::default().enabled, path));
+    }
+    let raw = fs::read_to_string(&path)
+        .with_context(|| format!("failed to read config at {}", path.display()))?;
+    let doc: toml::Value = toml::from_str(&raw)
+        .with_context(|| format!("failed to parse config at {}", path.display()))?;
+    let enabled = doc
+        .get("lsp")
+        .and_then(|v| v.get("enabled"))
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(crate::lsp::LspConfig::default().enabled);
+    Ok((enabled, path))
+}
+
+fn persist_lsp_enabled(enabled: bool) -> CommandResult {
+    use anyhow::Context;
+    use std::fs;
+    let path = match config_toml_path() {
+        Ok(path) => path,
+        Err(err) => return CommandResult::error(format!("Failed to resolve config: {err}")),
+    };
+    if let Some(parent) = path.parent()
+        && let Err(err) = fs::create_dir_all(parent)
+    {
+        return CommandResult::error(format!("Failed to create config dir: {err}"));
+    }
+    let mut doc: toml::Value = if path.exists() {
+        match fs::read_to_string(&path)
+            .with_context(|| format!("failed to read config at {}", path.display()))
+            .and_then(|raw| {
+                toml::from_str(&raw)
+                    .with_context(|| format!("failed to parse config at {}", path.display()))
+            }) {
+            Ok(doc) => doc,
+            Err(err) => return CommandResult::error(format!("{err}")),
+        }
+    } else {
+        toml::Value::Table(toml::value::Table::new())
+    };
+    let Some(root) = doc.as_table_mut() else {
+        return CommandResult::error("config.toml root must be a table");
+    };
+    let lsp = root
+        .entry("lsp".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
+    let Some(lsp_table) = lsp.as_table_mut() else {
+        return CommandResult::error("`lsp` section in config.toml must be a table");
+    };
+    lsp_table.insert("enabled".to_string(), toml::Value::Boolean(enabled));
+    let body = match toml::to_string_pretty(&doc) {
+        Ok(body) => body,
+        Err(err) => return CommandResult::error(format!("Failed to serialize config: {err}")),
+    };
+    if let Err(err) = crate::utils::write_atomic(&path, body.as_bytes()) {
+        return CommandResult::error(format!("Failed to write config: {err}"));
+    }
+    CommandResult::message(format!(
+        "LSP diagnostics {} (saved to {}; restart current engine/session to apply)",
+        if enabled { "enabled" } else { "disabled" },
+        path.display()
+    ))
+}
+
+/// Apply a named config profile to the current session where runtime-safe.
+pub fn profile(app: &mut App, arg: Option<&str>) -> CommandResult {
+    let Some(name) = arg.map(str::trim).filter(|s| !s.is_empty()) else {
+        return CommandResult::message(
+            "Usage: /profile <name>\nLoads [profiles.<name>] for this session. Some settings still require restart.",
+        );
+    };
+    let cfg = match Config::load(None, Some(name)) {
+        Ok(cfg) => cfg,
+        Err(err) => return CommandResult::error(format!("{err}")),
+    };
+
+    let model = cfg.default_model();
+    app.model = model.clone();
+    app.api_provider = cfg.api_provider();
+    app.reasoning_effort = cfg
+        .reasoning_effort()
+        .map_or_else(ReasoningEffort::default, ReasoningEffort::from_setting);
+    app.allow_shell = cfg.allow_shell() || app.mode == AppMode::Yolo;
+    app.mcp_config_path = cfg.mcp_config_path();
+    app.mcp_restart_required = true;
+    app.update_model_compaction_budget();
+    app.last_prompt_tokens = None;
+    app.last_completion_tokens = None;
+    app.last_prompt_cache_hit_tokens = None;
+    app.last_prompt_cache_miss_tokens = None;
+    app.last_reasoning_replay_tokens = None;
+
+    CommandResult::with_message_and_action(
+        format!(
+            "profile '{name}' applied for this session: model={model}, provider={}, effort={}, mcp={}. MCP/LSP/server pools may need restart.",
+            app.api_provider.as_str(),
+            app.reasoning_effort.as_setting(),
+            app.mcp_config_path.display(),
+        ),
+        AppAction::UpdateCompaction(app.compaction_config()),
+    )
 }
 
 /// Open the `/statusline` multi-select picker for configuring footer items.
@@ -77,12 +314,12 @@ pub fn persist_status_items(items: &[crate::config::StatusItem]) -> anyhow::Resu
     tui_table.insert("status_items".to_string(), toml::Value::Array(array));
 
     let body = toml::to_string_pretty(&doc).context("failed to serialize config.toml")?;
-    fs::write(&path, body)
+    crate::utils::write_atomic(&path, body.as_bytes())
         .with_context(|| format!("failed to write config at {}", path.display()))?;
     Ok(path)
 }
 
-fn persist_root_string_key(key: &str, value: &str) -> anyhow::Result<PathBuf> {
+pub fn persist_root_string_key(key: &str, value: &str) -> anyhow::Result<PathBuf> {
     use anyhow::Context;
     use std::fs;
 
@@ -105,7 +342,7 @@ fn persist_root_string_key(key: &str, value: &str) -> anyhow::Result<PathBuf> {
         .context("config.toml root must be a table")?;
     table.insert(key.to_string(), toml::Value::String(value.to_string()));
     let body = toml::to_string_pretty(&doc).context("failed to serialize config.toml")?;
-    fs::write(&path, body)
+    crate::utils::write_atomic(&path, body.as_bytes())
         .with_context(|| format!("failed to write config at {}", path.display()))?;
     Ok(path)
 }
@@ -633,7 +870,7 @@ mod tests {
     fn test_show_config_opens_config_editor() {
         let mut app = create_test_app();
         app.total_tokens = 1234;
-        let result = show_config(&mut app);
+        let result = show_config(&mut app, None);
         assert!(result.message.is_none());
         assert!(matches!(result.action, Some(AppAction::OpenConfigView)));
     }

@@ -15,6 +15,7 @@ use async_trait::async_trait;
 use regex::Regex;
 use serde::Serialize;
 use serde_json::{Value, json};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -142,12 +143,15 @@ impl ToolSpec for FetchUrlTool {
             ));
         }
 
+        // Extract host once for both network policy and SSRF checks.
+        let url_host = host_from_url(&url);
+
         // Per-domain network policy gate (#135). If no policy is attached
-        // (e.g. ad-hoc tests), behavior is permissive — match pre-v0.7.0.
+        // (e.g. ad-hoc tests), behavior is permissive.
         if let Some(decider) = context.network_policy.as_ref()
-            && let Some(host) = host_from_url(&url)
+            && let Some(host) = url_host.as_ref()
         {
-            match decider.evaluate(&host, "fetch_url") {
+            match decider.evaluate(host, "fetch_url") {
                 Decision::Allow => {}
                 Decision::Deny => {
                     return Err(ToolError::permission_denied(format!(
@@ -163,19 +167,59 @@ impl ToolSpec for FetchUrlTool {
             }
         }
 
+        // SSRF protection: reject local/internal IPs and pin the validated DNS
+        // result into reqwest to close the DNS-rebinding TOCTOU window.
+        let mut dns_pinning: Option<(String, IpAddr)> = None;
+        if let Some(host) = url_host.as_ref() {
+            let host_lc = host.to_ascii_lowercase();
+            if matches!(host_lc.as_str(), "localhost" | "localhost.localdomain") {
+                return Err(ToolError::permission_denied(
+                    "requests to localhost are not allowed",
+                ));
+            }
+
+            if let Ok(ip) = host.parse::<IpAddr>() {
+                if is_restricted_ip(&ip) {
+                    return Err(ToolError::permission_denied(format!(
+                        "IP {ip} is a restricted address (private/loopback/link-local)"
+                    )));
+                }
+            } else if let Ok(addrs) = tokio::net::lookup_host((&**host, 0u16)).await {
+                let mut first_valid = None;
+                for addr in addrs {
+                    let ip = addr.ip();
+                    if is_restricted_ip(&ip) {
+                        return Err(ToolError::permission_denied(format!(
+                            "resolved IP {ip} is a restricted address (private/loopback/link-local)"
+                        )));
+                    }
+                    first_valid.get_or_insert(ip);
+                }
+                if let Some(ip) = first_valid {
+                    dns_pinning = Some((host.clone(), ip));
+                }
+            }
+            // If DNS resolution fails, let the HTTP request fail naturally so
+            // the caller still gets the provider/network error text.
+        }
+
         let format = Format::parse(input.get("format").and_then(Value::as_str))?;
         let max_bytes = optional_u64(&input, "max_bytes", DEFAULT_MAX_BYTES).min(HARD_MAX_BYTES);
         let timeout_ms =
             optional_u64(&input, "timeout_ms", DEFAULT_TIMEOUT_MS).min(HARD_MAX_TIMEOUT_MS);
 
-        let client = reqwest::Client::builder()
+        let mut client_builder = reqwest::Client::builder()
             .timeout(Duration::from_millis(timeout_ms))
             .user_agent(USER_AGENT)
-            .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
-            .build()
-            .map_err(|e| {
-                ToolError::execution_failed(format!("failed to build HTTP client: {e}"))
-            })?;
+            .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS));
+
+        if let Some((hostname, validated_ip)) = dns_pinning {
+            client_builder = client_builder.resolve(&hostname, SocketAddr::new(validated_ip, 0));
+        }
+
+        let client = client_builder.build().map_err(|e| {
+            ToolError::execution_failed(format!("failed to build HTTP client: {e}"))
+        })?;
 
         let resp = client
             .get(&url)
@@ -241,6 +285,41 @@ impl ToolSpec for FetchUrlTool {
 
         ToolResult::json(&response)
             .map_err(|e| ToolError::execution_failed(format!("failed to serialize response: {e}")))
+    }
+}
+
+/// Return true for addresses that must not be reachable through an
+/// LLM-initiated fetch: localhost, private/internal networks, link-local,
+/// multicast, unspecified, cloud metadata, CGNAT, benchmarking, and reserved
+/// ranges. IPv4-mapped IPv6 is checked as IPv4 to avoid bypasses.
+fn is_restricted_ip(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_multicast()
+                || v4.is_broadcast()
+                || v4.is_unspecified()
+                || matches!(v4.octets(), [100, 64..=127, ..])
+                || *v4 == Ipv4Addr::new(169, 254, 169, 254)
+                || matches!(v4.octets(), [198, 18..=19, ..])
+                || v4.octets()[0] >= 240
+        }
+        IpAddr::V6(v6) => {
+            if v6.is_unspecified()
+                || matches!(v6.octets(), [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, ..])
+            {
+                return true;
+            }
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_restricted_ip(&IpAddr::V4(v4));
+            }
+            v6.is_loopback()
+                || v6.is_multicast()
+                || matches!(v6.segments(), [0xfc00..=0xfdff, ..])
+                || matches!(v6.segments(), [0xfe80..=0xfebf, ..])
+        }
     }
 }
 
@@ -352,5 +431,43 @@ mod tests {
             .await;
         let err = res.expect_err("blocked host should fail");
         assert!(format!("{err}").contains("blocked"));
+    }
+
+    #[test]
+    fn restricted_ip_classifier_blocks_local_internal_and_metadata() {
+        for ip in [
+            "127.0.0.1",
+            "10.0.0.1",
+            "172.16.0.1",
+            "192.168.1.1",
+            "169.254.169.254",
+            "100.64.0.1",
+            "::1",
+            "::",
+            "::ffff:127.0.0.1",
+            "fc00::1",
+            "fe80::1",
+        ] {
+            assert!(
+                is_restricted_ip(&ip.parse().unwrap()),
+                "{ip} should be blocked"
+            );
+        }
+        for ip in ["8.8.8.8", "1.1.1.1", "2606:4700::1"] {
+            assert!(
+                !is_restricted_ip(&ip.parse().unwrap()),
+                "{ip} should be allowed"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_localhost_hostname() {
+        let tool = FetchUrlTool;
+        let res = tool
+            .execute(json!({"url": "http://localhost:12345"}), &ctx())
+            .await;
+        let err = res.expect_err("localhost should fail before request");
+        assert!(format!("{err}").contains("localhost"));
     }
 }

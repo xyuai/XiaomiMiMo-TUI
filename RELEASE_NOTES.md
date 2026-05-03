@@ -1,33 +1,27 @@
-# XiaomiMiMo-TUI v0.5.5
-
-本次更新新增 CI 质量检查，优化语音合成默认输出路径，并补充 Windows 中文编码说明。
+# XiaomiMiMo-TUI v0.6.0
 
 ## 更新内容
 
-- Release 只发布 `xiaomimimo-windows-x64.exe`、`xiaomimimo-tui-windows-x64.exe` 和校验文件。
-- 不再发布 `xiaomimimo.exe`、`xiaomimimo-tui.exe`，避免重复资源。
-- 已清理 `v0.5.2` 和 `v0.5.3` 的历史重复资源。
-- 已新增 `/` 指令自动测试，检查重复注册、别名解析和调度。
-- 已修复 `/context` 重复注册，保留 `/ctx` 别名。
-- 已修复 `/save` 和 `/export` 的 workspace 路径问题。
-- 已修复 `/attach` 在 Windows 下的 `~/` 路径解析。
-- 已修复 CLI provider 的 `xiaomimimo` 解析。
-- 已修复 flash 模型归类和文件提及补全问题。
-- 已新增 CI 中的 `cargo clippy --workspace --all-targets -- -D warnings` 和 workspace 测试检查。
-- 已优化语音合成输出体验：省略 `-o/--output` 时默认文件名会跟随 `--format`，并支持 `[speech].output_dir` / `XIAOMIMIMO_SPEECH_OUTPUT_DIR` 默认输出目录。
-- 已补充 Windows 中文显示说明：文档使用 UTF-8，旧版 PowerShell 若乱码可使用 PowerShell 7 或 `chcp 65001`。
+- 加强 `fetch_url` 安全校验：拦截本地、私网、链路本地、组播、云 metadata 等地址，并固定 DNS 解析结果，降低 DNS rebinding 风险。
+- 修复 Skills 展示路径：使用实际 `SKILL.md` 所在目录，支持目录名与 skill name 不一致的情况。
+- 配置、设置、会话、checkpoint、offline queue 和 MCP 状态保存改为原子写入，降低异常退出导致文件损坏的概率。
+- 增加后台任务监督：engine、任务 worker、自动化 scheduler 等异步任务 panic 时会记录 crash dump。
+- 增强 `/config`：支持查看当前配置项，并支持在会话内临时修改配置。
+- 新增 `/lsp`、`/cache`、`/profile` 命令：可查看/切换 LSP 开关、查看最近 token/cache 遥测、快速切换配置 profile。
+- 增强 `/undo`：优先回滚最近一次文件修改快照，无可用快照时保留原有对话撤销行为。
+- 优化 MCP 与 session 状态保存流程，提高运行时稳定性。
 
 ## Windows 资源
 
-本版本只发布以下资源：
+本版本在线发布以下 Windows x64 资源：
 
 - `xiaomimimo-windows-x64.exe`
 - `xiaomimimo-tui-windows-x64.exe`
 - `xiaomimimo-artifacts-sha256.txt`
 
-旧的无平台后缀别名资源 `xiaomimimo.exe`、`xiaomimimo-tui.exe` 不再发布，因为它们与 Windows x64 正式资源内容重复。
-
 ## 验证
 
 - `cargo check --workspace --locked --offline`
-- `XIAOMIMIMO_TUI_VERSION=0.5.3 node npm/xiaomimimo-tui/scripts/verify-release-assets.js`
+- `cargo test --workspace --locked --offline patch_undo_restores_latest_tool_snapshot`
+- `cargo test --workspace --locked --offline execute_lsp_cache_and_profile_dispatch`
+- `cargo test --workspace --locked --offline test_cache_shows_latest_turn_telemetry`
