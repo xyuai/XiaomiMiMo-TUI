@@ -16,6 +16,8 @@ use tokio::time::timeout as tokio_timeout;
 /// After this period with no data, the stream is considered stalled and
 /// yields a recoverable error so the caller can retry.
 const DEFAULT_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+const SIMPLIFIED_CHINESE_THINKING_SYSTEM_MESSAGE: &str =
+    "最高优先级语言规则：除非用户明确要求其他语言，否则所有可见思考、推理过程、reasoning_content、Thinking 内容和最终回答都必须使用简体中文。不要用英文写 reasoning_content。工具名、代码、命令、路径、日志和 API 字段保持原文。";
 
 /// Reads the `XIAOMIMIMO_STREAM_IDLE_TIMEOUT_SECS` env var, falling back to
 /// the default 300s. The parsed value is clamped to [1, 3600] seconds.
@@ -383,6 +385,10 @@ fn build_chat_messages_with_reasoning(
         out.push(json!({
             "role": "system",
             "content": instructions,
+        }));
+        out.push(json!({
+            "role": "system",
+            "content": SIMPLIFIED_CHINESE_THINKING_SYSTEM_MESSAGE,
         }));
     }
 

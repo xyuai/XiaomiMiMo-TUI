@@ -336,6 +336,16 @@ mod tests {
     }
 
     #[test]
+    fn base_prompt_requires_simplified_chinese_thinking_and_replies() {
+        let prompt = compose_prompt(AppMode::Agent, Personality::Calm);
+        assert!(prompt.contains("\u{7b80}\u{4f53}\u{4e2d}\u{6587}"));
+        assert!(prompt.contains("\u{53ef}\u{89c1}\u{601d}\u{8003}"));
+        assert!(prompt.contains("reasoning_content"));
+        assert!(prompt.contains("Thinking"));
+        assert!(prompt.contains("\u{6700}\u{7ec8}\u{56de}\u{7b54}"));
+    }
+
+    #[test]
     fn compose_prompt_deterministic_order() {
         let prompt = compose_prompt(AppMode::Yolo, Personality::Calm);
         let base_pos = prompt.find("You are XiaomiMiMo TUI").unwrap();

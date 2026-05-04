@@ -1151,6 +1151,40 @@ mod tests {
     }
 
     #[test]
+    fn chat_messages_append_independent_chinese_thinking_language_system_message() {
+        let system = SystemPrompt::Text(
+            "You are XiaomiMiMo TUI. Use tools carefully.".to_string(),
+        );
+        let message = Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::Text {
+                text: "为什么雨后会看到彩虹？".to_string(),
+                cache_control: None,
+            }],
+        };
+
+        let out = build_chat_messages(Some(&system), &[message], "mimo-v2.5-pro");
+        let system_messages: Vec<_> = out
+            .iter()
+            .filter(|value| value.get("role").and_then(Value::as_str) == Some("system"))
+            .collect();
+
+        assert_eq!(system_messages.len(), 2);
+        assert_eq!(
+            system_messages[0].get("content").and_then(Value::as_str),
+            Some("You are XiaomiMiMo TUI. Use tools carefully.")
+        );
+        let language_message = system_messages[1]
+            .get("content")
+            .and_then(Value::as_str)
+            .expect("language system content");
+        assert!(language_message.contains("\u{6700}\u{9ad8}\u{4f18}\u{5148}\u{7ea7}"));
+        assert!(language_message.contains("reasoning_content"));
+        assert!(language_message.contains("Thinking"));
+        assert!(language_message.contains("\u{7b80}\u{4f53}\u{4e2d}\u{6587}"));
+    }
+
+    #[test]
     fn chat_messages_keep_thinking_only_assistant_for_v4_flash() {
         let message = Message {
             role: "assistant".to_string(),
