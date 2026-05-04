@@ -8,13 +8,13 @@ use ratatui::text::{Line, Span};
 use serde_json::Value;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::xiaomimimo_theme::active_theme;
 use crate::models::{ContentBlock, Message};
 use crate::palette;
 use crate::tools::review::ReviewOutput;
 use crate::tui::app::TranscriptSpacing;
 use crate::tui::diff_render;
 use crate::tui::markdown_render;
+use crate::xiaomimimo_theme::active_theme;
 
 // === Constants ===
 
@@ -1178,6 +1178,9 @@ pub struct GenericToolCell {
     /// fan-out tool), each prompt is shown on its own indented row instead
     /// of the inline `args:` summary. `None` for ordinary tools.
     pub prompts: Option<Vec<String>>,
+    /// Filesystem path to the full output's spillover file, when a large tool
+    /// result was saved to disk instead of being kept fully inline.
+    pub spillover_path: Option<std::path::PathBuf>,
 }
 
 impl GenericToolCell {
@@ -1265,6 +1268,12 @@ impl GenericToolCell {
                 TOOL_OUTPUT_LINE_LIMIT,
                 mode,
             ));
+
+            if matches!(mode, RenderMode::Live)
+                && let Some(path) = self.spillover_path.as_ref()
+            {
+                lines.push(render_spillover_annotation(path, width));
+            }
         }
         lines
     }
@@ -1292,6 +1301,19 @@ impl GenericToolCell {
             mode,
         ))
     }
+}
+
+/// Render the inline annotation for a tool cell whose full output was spilled
+/// to disk.
+fn render_spillover_annotation(path: &std::path::Path, width: u16) -> Line<'static> {
+    let display = path.display().to_string();
+    let prefix = "  full output: ";
+    let budget = usize::from(width).saturating_sub(prefix.len()).max(8);
+    let truncated = truncate_text(&display, budget);
+    Line::from(vec![
+        Span::styled(prefix, Style::default().fg(palette::TEXT_MUTED)),
+        Span::styled(truncated, Style::default().fg(palette::TEXT_MUTED).italic()),
+    ])
 }
 
 fn is_checklist_tool_name(name: &str) -> bool {
@@ -2571,9 +2593,9 @@ mod tests {
         assistant_label_style_for, extract_reasoning_summary, render_thinking,
         running_status_label_with_elapsed,
     };
-    use crate::xiaomimimo_theme::Theme;
     use crate::models::{ContentBlock, Message};
     use crate::palette;
+    use crate::xiaomimimo_theme::Theme;
     use ratatui::style::Modifier;
     use std::time::{Duration, Instant};
 
@@ -2845,6 +2867,7 @@ mod tests {
             input_summary: Some("foo".to_string()),
             output: None,
             prompts: None,
+            spillover_path: None,
         };
         let lines = cell.lines_with_mode(80, true, super::RenderMode::Live);
         let header_visible: String = lines[0]
@@ -2860,6 +2883,85 @@ mod tests {
         assert!(
             header_visible.contains(" delegate "),
             "verb label `delegate`: {header_visible:?}"
+        );
+    }
+
+    #[test]
+    fn render_spillover_annotation_shows_path() {
+        use std::path::PathBuf;
+
+        let cell = GenericToolCell {
+            name: "exec_shell".to_string(),
+            status: ToolStatus::Success,
+            input_summary: Some("command: cargo build --release".to_string()),
+            output: Some("very large output...".to_string()),
+            prompts: None,
+            spillover_path: Some(PathBuf::from(
+                "/Users/dev/.xiaomimimo/tool_outputs/call-abc12.txt",
+            )),
+        };
+        let lines = cell.lines_with_mode(120, true, super::RenderMode::Live);
+        let joined = lines_text(&lines);
+
+        assert!(
+            joined.contains("full output:"),
+            "missing annotation: {joined:?}"
+        );
+        assert!(
+            joined.contains("/Users/dev/.xiaomimimo/tool_outputs/call-abc12.txt"),
+            "missing spillover path: {joined:?}"
+        );
+    }
+
+    #[test]
+    fn render_spillover_annotation_omitted_in_transcript_mode() {
+        use std::path::PathBuf;
+
+        let cell = GenericToolCell {
+            name: "exec_shell".to_string(),
+            status: ToolStatus::Success,
+            input_summary: None,
+            output: Some("output".to_string()),
+            prompts: None,
+            spillover_path: Some(PathBuf::from("/tmp/spill.txt")),
+        };
+        let lines = cell.lines_with_mode(120, true, super::RenderMode::Transcript);
+        let joined = lines_text(&lines);
+
+        assert!(!joined.contains("full output:"), "{joined:?}");
+    }
+
+    #[test]
+    fn render_spillover_annotation_truncates_to_width() {
+        use std::path::PathBuf;
+
+        let long_path = "/Users/dev/.xiaomimimo/tool_outputs/this-is-a-very-long-tool-call-id.txt";
+        let cell = GenericToolCell {
+            name: "exec_shell".to_string(),
+            status: ToolStatus::Success,
+            input_summary: None,
+            output: Some("output".to_string()),
+            prompts: None,
+            spillover_path: Some(PathBuf::from(long_path)),
+        };
+        let lines = cell.lines_with_mode(40, true, super::RenderMode::Live);
+        let annotation = lines
+            .iter()
+            .find(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.content.as_ref().contains("full output:"))
+            })
+            .expect("annotation line");
+        let visible: String = annotation
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+
+        assert!(
+            visible.contains("..."),
+            "path should be truncated: {visible:?}"
         );
     }
 
@@ -3280,6 +3382,7 @@ mod tests {
                 "List the public types in client.rs".to_string(),
                 "Diff this commit against main".to_string(),
             ]),
+            spillover_path: None,
         }));
         let text = lines_text(&cell.lines(80));
 
@@ -3304,6 +3407,7 @@ mod tests {
             input_summary: Some("query: foo".to_string()),
             output: None,
             prompts: None,
+            spillover_path: None,
         }));
         let text = lines_text(&cell.lines(80));
         assert!(text.contains("query: foo"));
@@ -3326,6 +3430,7 @@ mod tests {
             input_summary: Some("command: git diff --stat".to_string()),
             output: Some(diff_stat.to_string()),
             prompts: None,
+            spillover_path: None,
         }));
 
         let transcript_text = lines_text(&cell.transcript_lines(80));
@@ -3375,6 +3480,7 @@ mod tests {
             input_summary: Some("command: ls".to_string()),
             output: Some(output),
             prompts: None,
+            spillover_path: None,
         }));
 
         let live = cell.lines_with_options(80, TranscriptRenderOptions::default());
@@ -3409,6 +3515,7 @@ mod tests {
             input_summary: Some("command: noisy".to_string()),
             output: Some(output),
             prompts: None,
+            spillover_path: None,
         }));
 
         let live_text =
@@ -3443,6 +3550,7 @@ mod tests {
             input_summary: Some("command: tool".to_string()),
             output: Some(output),
             prompts: None,
+            spillover_path: None,
         }));
 
         let live_text =

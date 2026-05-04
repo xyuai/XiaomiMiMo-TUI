@@ -7,6 +7,7 @@ use crate::tui::file_mention::{
 use crate::tui::history::{
     ExecCell, ExecSource, GenericToolCell, HistoryCell, SubAgentCell, ToolCell, ToolStatus,
 };
+use crate::tui::pager::PagerView;
 use crate::tui::views::{ModalView, ViewAction};
 use crate::working_set::Workspace;
 use std::path::PathBuf;
@@ -451,6 +452,7 @@ fn active_tool_status_label_summarizes_live_tool_group() {
             input_summary: Some("pattern: TODO".to_string()),
             output: Some("done".to_string()),
             prompts: None,
+            spillover_path: None,
         })),
     );
     app.active_cell = Some(active);
@@ -1389,6 +1391,16 @@ fn api_key_validation_warns_without_blocking_unusual_formats() {
 }
 
 #[test]
+fn api_key_paste_shortcut_is_not_plain_text_input() {
+    let ctrl_v = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL);
+    assert!(is_paste_shortcut(&ctrl_v));
+    assert!(!is_text_input_key(&ctrl_v));
+
+    let shifted = KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT);
+    assert!(is_text_input_key(&shifted));
+}
+
+#[test]
 fn jump_to_adjacent_tool_cell_finds_next_and_previous() {
     let mut app = create_test_app();
     app.history = vec![
@@ -1401,6 +1413,7 @@ fn jump_to_adjacent_tool_cell_finds_next_and_previous() {
             input_summary: Some("query: foo".to_string()),
             output: Some("done".to_string()),
             prompts: None,
+            spillover_path: None,
         })),
         HistoryCell::Assistant {
             content: "ok".to_string(),
@@ -1412,6 +1425,7 @@ fn jump_to_adjacent_tool_cell_finds_next_and_previous() {
             input_summary: Some("ls".to_string()),
             output: Some("...".to_string()),
             prompts: None,
+            spillover_path: None,
         })),
     ];
     app.mark_history_updated();
@@ -1462,6 +1476,7 @@ fn detail_target_prefers_visible_tool_card() {
             input_summary: Some("query: foo".to_string()),
             output: Some("done".to_string()),
             prompts: None,
+            spillover_path: None,
         })),
         HistoryCell::Assistant {
             content: "ok".to_string(),
@@ -1473,6 +1488,7 @@ fn detail_target_prefers_visible_tool_card() {
             input_summary: Some("command: ls".to_string()),
             output: Some("...".to_string()),
             prompts: None,
+            spillover_path: None,
         })),
     ];
     app.tool_details_by_cell.insert(
@@ -1482,6 +1498,7 @@ fn detail_target_prefers_visible_tool_card() {
             tool_name: "file_search".to_string(),
             input: serde_json::json!({"query": "foo"}),
             output: Some("done".to_string()),
+            spillover_path: None,
         },
     );
     app.tool_details_by_cell.insert(
@@ -1491,6 +1508,7 @@ fn detail_target_prefers_visible_tool_card() {
             tool_name: "exec_shell".to_string(),
             input: serde_json::json!({"command": "ls"}),
             output: Some("...".to_string()),
+            spillover_path: None,
         },
     );
     app.resync_history_revisions();
@@ -1541,6 +1559,48 @@ fn open_tool_details_pager_supports_active_virtual_tool_cell() {
 }
 
 #[test]
+fn open_tool_details_pager_includes_spillover_file_body() {
+    let mut app = create_test_app();
+    let tmp = TempDir::new().expect("tempdir");
+    let spill_path = tmp.path().join("spill.txt");
+    std::fs::write(&spill_path, "full output body").expect("write spill");
+
+    app.history = vec![HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
+        name: "exec_shell".to_string(),
+        status: ToolStatus::Success,
+        input_summary: Some("command: noisy".to_string()),
+        output: Some("truncated head".to_string()),
+        prompts: None,
+        spillover_path: Some(spill_path.clone()),
+    }))];
+    app.tool_details_by_cell.insert(
+        0,
+        ToolDetailRecord {
+            tool_id: "call-spill".to_string(),
+            tool_name: "exec_shell".to_string(),
+            input: serde_json::json!({"command": "noisy"}),
+            output: Some("truncated head".to_string()),
+            spillover_path: Some(spill_path.clone()),
+        },
+    );
+    app.last_transcript_top = 0;
+    app.last_transcript_visible = 4;
+
+    assert!(open_details_pager_for_cell(&mut app, 0));
+    let mut view = app.view_stack.pop().expect("pager pushed");
+    let pager = view
+        .as_any_mut()
+        .downcast_mut::<PagerView>()
+        .expect("pager view");
+    let text = pager.plain_text();
+
+    assert!(text.contains("Output:\ntruncated head"), "{text}");
+    assert!(text.contains("Full output (spillover)"), "{text}");
+    assert!(text.contains("full output body"), "{text}");
+    assert!(text.contains(&spill_path.display().to_string()), "{text}");
+}
+
+#[test]
 fn details_shortcut_modifiers_accept_plain_shift_and_alt_only() {
     assert!(details_shortcut_modifiers(KeyModifiers::NONE));
     assert!(details_shortcut_modifiers(KeyModifiers::SHIFT));
@@ -1552,6 +1612,22 @@ fn details_shortcut_modifiers_accept_plain_shift_and_alt_only() {
     assert!(!details_shortcut_modifiers(
         KeyModifiers::ALT | KeyModifiers::CONTROL
     ));
+}
+
+#[test]
+fn ctrl_h_is_treated_as_terminal_backspace() {
+    assert!(is_ctrl_h_backspace(&KeyEvent::new(
+        KeyCode::Char('h'),
+        KeyModifiers::CONTROL
+    )));
+    assert!(!is_ctrl_h_backspace(&KeyEvent::new(
+        KeyCode::Char('h'),
+        KeyModifiers::NONE
+    )));
+    assert!(!is_ctrl_h_backspace(&KeyEvent::new(
+        KeyCode::Char('h'),
+        KeyModifiers::CONTROL | KeyModifiers::ALT
+    )));
 }
 
 #[test]
@@ -3310,6 +3386,7 @@ fn footer_active_tool_label_suppresses_fanout_tools() {
             input_summary: None,
             output: None,
             prompts: None,
+            spillover_path: None,
         })),
     );
 
@@ -3344,6 +3421,7 @@ fn esc_during_fanout_clears_active_cell_but_preserves_background_swarm() {
             input_summary: None,
             output: None,
             prompts: None,
+            spillover_path: None,
         })),
     );
     let outcome = SwarmOutcome {
@@ -3414,6 +3492,7 @@ fn turn_complete_after_esc_is_idempotent() {
             input_summary: None,
             output: None,
             prompts: None,
+            spillover_path: None,
         })),
     );
     app.active_cell = Some(active);
@@ -3508,6 +3587,7 @@ fn checklist_write_renders_dedicated_card() {
                 .to_string(),
         ),
         prompts: None,
+        spillover_path: None,
     };
     let lines = cell.lines_with_mode(80, true, crate::tui::history::RenderMode::Live);
     let text: Vec<String> = lines

@@ -553,6 +553,50 @@ enum SandboxCommand {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Set up process panic hook before anything else. Besides delegating to
+    // the default hook, it restores terminal modes that a crashing TUI can
+    // otherwise leak into the parent shell: raw mode, alt-screen, bracketed
+    // paste, mouse capture, and Kitty keyboard enhancement flags.
+    let orig_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        use crossterm::event::{
+            DisableBracketedPaste, DisableMouseCapture, PopKeyboardEnhancementFlags,
+        };
+        use crossterm::terminal::{LeaveAlternateScreen, disable_raw_mode};
+
+        let _ = crossterm::execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
+        let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste);
+        let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
+        let _ = disable_raw_mode();
+        let _ = crossterm::execute!(std::io::stdout(), LeaveAlternateScreen);
+
+        let msg = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            format!("{:?}", panic_info.payload())
+        };
+        let location = panic_info
+            .location()
+            .map(|loc| loc.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        tracing::error!(target: "panic", "Process panicked at {location}: {msg}");
+
+        if let Some(home) = dirs::home_dir() {
+            let crash_dir = home.join(".xiaomimimo").join("crashes");
+            let _ = std::fs::create_dir_all(&crash_dir);
+            let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
+            let path = crash_dir.join(format!("{timestamp}-process-panic.log"));
+            let contents = format!(
+                "Process panicked\nLocation: {location}\nTimestamp: {timestamp}\nPanic: {msg}\n",
+            );
+            let _ = crate::utils::write_atomic(&path, contents.as_bytes());
+        }
+
+        orig_hook(panic_info);
+    }));
+
     dotenv().ok();
     let cli = Cli::parse();
     logging::set_verbose(cli.verbose || logging::env_requests_verbose_logging());
@@ -3142,6 +3186,19 @@ async fn run_interactive(
     let snapshots = config.snapshots_config();
     if snapshots.enabled {
         session_manager::prune_workspace_snapshots(&workspace, snapshots.max_age());
+    }
+
+    match crate::tools::truncate::prune_older_than(crate::tools::truncate::SPILLOVER_MAX_AGE) {
+        Ok(0) => {}
+        Ok(n) => tracing::debug!(
+            target: "spillover",
+            "boot prune removed {n} spillover file(s)"
+        ),
+        Err(err) => tracing::warn!(
+            target: "spillover",
+            ?err,
+            "spillover prune skipped on boot"
+        ),
     }
 
     tui::run_tui(

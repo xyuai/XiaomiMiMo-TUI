@@ -1,12 +1,13 @@
-# XiaomiMiMo-TUI v0.6.1
+# XiaomiMiMo-TUI v0.6.2
 
 ## 更新内容
 
-- 将 TUI 内各项指令返回信息改为中文，包括配置、上下文、缓存、token、会话、队列、任务、MCP、Provider、Skills 等常用命令输出。
-- 将上下文检查器、右键菜单、状态提示、帮助提示等界面信息改为中文，减少中英文混用。
-- 优化命令错误、用法说明、空状态提示和操作成功提示的中文表达，让返回结果更容易直接阅读。
-- 保持命令名称、参数、路径、模型名、Provider 名称等技术标识原样，避免影响复制和脚本使用。
-- 修复中文化后的右键菜单测试断言，确保 Windows CI 的 clippy 和完整测试通过。
+- 增强 TUI 终端恢复、键盘增强协议回退、粘贴快捷键识别和 Ctrl+H 退格兼容。
+- 改进 Markdown 渲染：支持表格、水平分隔线、粗体/斜体标记处理，并修复未闭合 inline marker 的潜在循环问题。
+- 加强 `exec_shell` 工作目录校验：`cwd` / `working_dir` 会解析到工作区内，拒绝越界路径，并修复前台 shell 执行忽略 cwd 的问题。
+- 新增大工具输出 spillover：超过阈值的成功工具输出会保存到 `~/.xiaomimimo/tool_outputs/`，模型和 UI 只显示有界预览及完整文件路径。
+- 工具详情页支持查看 spillover 完整输出，并在启动时清理 7 天前的旧工具输出文件。
+- 新增 panic 恢复钩子，崩溃时尽量恢复 raw mode、alt screen、mouse capture、bracketed paste 和 Kitty keyboard flags，并写入 crash log。
 
 ## Windows 资源
 
@@ -18,5 +19,9 @@
 
 ## 验证
 
-- `cargo clippy --workspace --all-targets --locked -- -D warnings`
-- `cargo test --workspace --locked --no-fail-fast`
+- `cargo test -p xiaomimimo-tui spillover -- --nocapture`
+- `cargo test -p xiaomimimo-tui markdown_render -- --nocapture`
+- `cargo test -p xiaomimimo-tui cwd -- --nocapture`
+- `cargo test -p xiaomimimo-tui api_key_paste_shortcut_is_not_plain_text_input -- --nocapture`
+- `cargo test -p xiaomimimo-tui ctrl_h_is_treated_as_terminal_backspace -- --nocapture`
+- `cargo check -p xiaomimimo-tui`

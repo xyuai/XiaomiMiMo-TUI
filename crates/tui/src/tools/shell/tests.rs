@@ -241,6 +241,49 @@ fn test_summarize_output_strips_truncation_note() {
 }
 
 #[tokio::test]
+async fn test_exec_shell_rejects_cwd_outside_workspace() {
+    let workspace = tempdir().expect("workspace tempdir");
+    let outside = tempdir().expect("outside tempdir");
+    let ctx = ToolContext::new(workspace.path());
+    let tool = ExecShellTool;
+
+    let result = tool
+        .execute(
+            json!({
+                "command": echo_command("blocked"),
+                "cwd": outside.path().to_string_lossy()
+            }),
+            &ctx,
+        )
+        .await;
+
+    assert!(matches!(result, Err(ToolError::PathEscape { .. })));
+}
+
+#[tokio::test]
+async fn test_exec_shell_accepts_cwd_inside_workspace() {
+    let workspace = tempdir().expect("workspace tempdir");
+    let nested = workspace.path().join("nested");
+    std::fs::create_dir_all(&nested).expect("create nested workspace dir");
+    let ctx = ToolContext::new(workspace.path());
+    let tool = ExecShellTool;
+
+    let result = tool
+        .execute(
+            json!({
+                "command": echo_command("inside"),
+                "cwd": "nested"
+            }),
+            &ctx,
+        )
+        .await
+        .expect("execute");
+
+    assert!(result.success);
+    assert!(result.content.contains("inside"));
+}
+
+#[tokio::test]
 async fn test_exec_shell_metadata_includes_summaries() {
     let tmp = tempdir().expect("tempdir");
     let ctx = ToolContext::new(tmp.path());

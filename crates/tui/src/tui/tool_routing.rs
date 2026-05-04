@@ -243,6 +243,7 @@ pub(super) fn handle_tool_call_started(
             input_summary,
             output: None,
             prompts,
+            spillover_path: None,
         })),
     );
 }
@@ -308,6 +309,7 @@ fn register_tool_cell(
         tool_name: tool_name.to_string(),
         input: input.clone(),
         output: None,
+        spillover_path: None,
     };
     if cell_index < app.history.len() {
         app.tool_details_by_cell.insert(cell_index, record);
@@ -330,17 +332,30 @@ fn store_tool_detail_output(
         Ok(tool_result) => tool_result.content.clone(),
         Err(err) => err.to_string(),
     });
+    let spillover_path = spillover_path_from_tool_result(result);
     if cell_index < app.history.len()
         && let Some(detail) = app.tool_details_by_cell.get_mut(&cell_index)
     {
         detail.output = payload.clone();
+        detail.spillover_path = spillover_path.clone();
     }
     // Also write to the active table while the entry might still live there;
     // some callsites pre-rewrite cell_index but the active_tool_details map is
     // the canonical source for in-flight outputs.
     if let Some(detail) = app.active_tool_details.get_mut(tool_id) {
         detail.output = payload;
+        detail.spillover_path = spillover_path;
     }
+}
+
+fn spillover_path_from_tool_result(result: &Result<ToolResult, ToolError>) -> Option<PathBuf> {
+    result
+        .as_ref()
+        .ok()
+        .and_then(|r| r.metadata.as_ref())
+        .and_then(|m| m.get("spillover_path"))
+        .and_then(serde_json::Value::as_str)
+        .map(PathBuf::from)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -508,9 +523,16 @@ pub(super) fn handle_tool_call_complete(
                 match result.as_ref() {
                     Ok(tool_result) => {
                         generic.output = Some(summarize_tool_output(&tool_result.content));
+                        generic.spillover_path = tool_result
+                            .metadata
+                            .as_ref()
+                            .and_then(|m| m.get("spillover_path"))
+                            .and_then(serde_json::Value::as_str)
+                            .map(std::path::PathBuf::from);
                     }
                     Err(err) => {
                         generic.output = Some(err.to_string());
+                        generic.spillover_path = None;
                     }
                 }
                 app.mark_history_updated();
@@ -566,12 +588,14 @@ fn push_orphan_tool_completion(
     };
     let history_threshold_before_push = app.history.len();
     let active_in_flight = app.active_cell.is_some();
+    let spillover_path = spillover_path_from_tool_result(result);
     app.add_message(HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
         name: name.to_string(),
         status,
         input_summary: None,
         output,
         prompts: None,
+        spillover_path: spillover_path.clone(),
     })));
     let cell_index = app.history.len().saturating_sub(1);
     app.tool_details_by_cell.insert(
@@ -584,6 +608,7 @@ fn push_orphan_tool_completion(
                 Ok(tool_result) => Some(tool_result.content.clone()),
                 Err(err) => Some(err.to_string()),
             },
+            spillover_path,
         },
     );
 

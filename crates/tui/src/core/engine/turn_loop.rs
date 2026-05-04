@@ -1078,7 +1078,7 @@ impl Engine {
                     let started_at = Instant::now();
 
                     tool_tasks.push(async move {
-                        let result = Engine::execute_tool_with_lock(
+                        let mut result = Engine::execute_tool_with_lock(
                             lock,
                             plan.supports_parallel,
                             plan.interactive,
@@ -1090,6 +1090,22 @@ impl Engine {
                             None,
                         )
                         .await;
+
+                        // Spill oversized successful outputs before the
+                        // result fans out to both the UI cell and the model
+                        // context. Both consumers see the same bounded head
+                        // plus metadata pointing at the full file.
+                        if let Ok(tool_result) = result.as_mut()
+                            && let Some(path) =
+                                crate::tools::truncate::apply_spillover(tool_result, &plan.id)
+                        {
+                            emit_tool_audit(json!({
+                                "event": "tool.spillover",
+                                "tool_id": plan.id.clone(),
+                                "tool_name": plan.name.clone(),
+                                "path": path.display().to_string(),
+                            }));
+                        }
 
                         let _ = tx_event
                             .send(Event::ToolCallComplete {
@@ -1339,7 +1355,7 @@ impl Engine {
                     }
 
                     let started_at = Instant::now();
-                    let result = if let Some(result_override) = result_override {
+                    let mut result = if let Some(result_override) = result_override {
                         result_override
                     } else {
                         Self::execute_tool_with_lock(
@@ -1355,6 +1371,20 @@ impl Engine {
                         )
                         .await
                     };
+
+                    // Spill oversized successful outputs before the result
+                    // reaches both the UI cell and the model context.
+                    if let Ok(tool_result) = result.as_mut()
+                        && let Some(path) =
+                            crate::tools::truncate::apply_spillover(tool_result, &tool_id)
+                    {
+                        emit_tool_audit(json!({
+                            "event": "tool.spillover",
+                            "tool_id": tool_id.clone(),
+                            "tool_name": tool_name.clone(),
+                            "path": path.display().to_string(),
+                        }));
+                    }
 
                     let _ = self
                         .tx_event

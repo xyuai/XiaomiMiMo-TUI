@@ -756,6 +756,7 @@ pub struct ToolDetailRecord {
     pub tool_name: String,
     pub input: Value,
     pub output: Option<String>,
+    pub spillover_path: Option<std::path::PathBuf>,
 }
 
 /// Lightweight task view for sidebar rendering.

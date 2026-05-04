@@ -88,7 +88,8 @@ use super::approval::{
     ApprovalMode, ApprovalRequest, ApprovalView, ElevationRequest, ElevationView, ReviewDecision,
 };
 use super::history::{
-    HistoryCell, ToolCell, ToolStatus, history_cells_from_message, summarize_tool_output,
+    GenericToolCell, HistoryCell, ToolCell, ToolStatus, history_cells_from_message,
+    summarize_tool_output,
 };
 use super::slash_menu::{
     apply_slash_menu_selection, try_autocomplete_slash_command, visible_slash_menu_entries,
@@ -152,8 +153,25 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     if use_bracketed_paste {
         execute!(stdout, EnableBracketedPaste)?;
     }
+    // Best effort: opt into Kitty keyboard protocol escape disambiguation.
+    // Terminals that do not support it ignore the sequence; supported
+    // terminals report Alt/Esc-modified keys more reliably. We pop the flag on
+    // normal shutdown, suspend/editor handoff, and panic.
+    if let Err(err) = execute!(
+        stdout,
+        crossterm::event::PushKeyboardEnhancementFlags(
+            crossterm::event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        )
+    ) {
+        tracing::debug!(
+            target: "kitty_keyboard",
+            ?err,
+            "PushKeyboardEnhancementFlags ignored"
+        );
+    }
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+    terminal.clear()?;
     let event_broker = EventBroker::new();
 
     // Local mutable copy so runtime config flips (e.g. `/provider` switch)
@@ -332,6 +350,10 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     // Clear crash-recovery checkpoint on normal exit so the next launch starts fresh.
     clear_checkpoint();
 
+    let _ = execute!(
+        terminal.backend_mut(),
+        crossterm::event::PopKeyboardEnhancementFlags
+    );
     disable_raw_mode()?;
     if use_alt_screen {
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
@@ -1458,6 +1480,13 @@ async fn run_event_loop(
                         app.delete_api_key_char();
                         sync_api_key_validation_status(app, false);
                     }
+                    KeyCode::Char('h')
+                        if is_ctrl_h_backspace(&key)
+                            && app.onboarding == OnboardingState::ApiKey =>
+                    {
+                        app.delete_api_key_char();
+                        sync_api_key_validation_status(app, false);
+                    }
                     KeyCode::Char('v') | KeyCode::Char('V')
                         if is_paste_shortcut(&key)
                             && app.onboarding == OnboardingState::Workspace =>
@@ -1481,10 +1510,7 @@ async fn run_event_loop(
                         app.insert_onboarding_workspace_char(c);
                     }
                     KeyCode::Char(c)
-                        if app.onboarding == OnboardingState::ApiKey
-                            && (key.modifiers.is_empty()
-                                || key.modifiers == KeyModifiers::SHIFT
-                                || key.modifiers == KeyModifiers::NONE) =>
+                        if app.onboarding == OnboardingState::ApiKey && is_text_input_key(&key) =>
                     {
                         app.insert_api_key_char(c);
                         sync_api_key_validation_status(app, false);
@@ -2050,6 +2076,12 @@ async fn run_event_loop(
                     app.delete_char();
                 }
                 KeyCode::Backspace => {}
+                KeyCode::Char('h')
+                    if is_ctrl_h_backspace(&key) && !app.remove_selected_composer_attachment() =>
+                {
+                    app.delete_char();
+                }
+                KeyCode::Char('h') if is_ctrl_h_backspace(&key) => {}
                 KeyCode::Delete if !app.remove_selected_composer_attachment() => {
                     app.delete_char_forward();
                 }
@@ -4686,6 +4718,10 @@ fn pause_terminal(
     use_mouse_capture: bool,
     use_bracketed_paste: bool,
 ) -> Result<()> {
+    let _ = execute!(
+        terminal.backend_mut(),
+        crossterm::event::PopKeyboardEnhancementFlags
+    );
     disable_raw_mode()?;
     if use_alt_screen {
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
@@ -6093,6 +6129,28 @@ fn open_tool_details_pager(app: &mut App) -> bool {
     open_details_pager_for_cell(app, cell_index)
 }
 
+fn spillover_pager_section(app: &App, cell_index: usize) -> Option<String> {
+    let path = app
+        .tool_detail_record_for_cell(cell_index)
+        .and_then(|detail| detail.spillover_path.as_ref())
+        .or_else(|| match app.cell_at_virtual_index(cell_index) {
+            Some(HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
+                spillover_path: Some(path),
+                ..
+            }))) => Some(path),
+            _ => None,
+        })?;
+
+    let path_str = path.display().to_string();
+    let body = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) => format!("(could not read spillover file: {err})"),
+    };
+    Some(format!(
+        "── Full output (spillover) ──\nFile: {path_str}\n\n{body}"
+    ))
+}
+
 fn open_details_pager_for_cell(app: &mut App, cell_index: usize) -> bool {
     if let Some(detail) = app.tool_detail_record_for_cell(cell_index) {
         let input = serde_json::to_string_pretty(&detail.input)
@@ -6101,10 +6159,17 @@ fn open_details_pager_for_cell(app: &mut App, cell_index: usize) -> bool {
             "(not available)".to_string(),
             std::string::ToString::to_string,
         );
-        let content = format!(
-            "Tool ID: {}\nTool: {}\n\nInput:\n{}\n\nOutput:\n{}",
-            detail.tool_id, detail.tool_name, input, output
-        );
+        let content = if let Some(section) = spillover_pager_section(app, cell_index) {
+            format!(
+                "Tool ID: {}\nTool: {}\n\nInput:\n{}\n\nOutput:\n{}\n\n{}",
+                detail.tool_id, detail.tool_name, input, output, section
+            )
+        } else {
+            format!(
+                "Tool ID: {}\nTool: {}\n\nInput:\n{}\n\nOutput:\n{}",
+                detail.tool_id, detail.tool_name, input, output
+            )
+        };
 
         let width = app
             .last_transcript_area
@@ -6272,6 +6337,19 @@ fn is_paste_shortcut(key: &KeyEvent) -> bool {
 
     // Ctrl+V on Linux/Windows
     key.modifiers.contains(KeyModifiers::CONTROL)
+}
+
+fn is_text_input_key(key: &KeyEvent) -> bool {
+    !key.modifiers.contains(KeyModifiers::CONTROL)
+        && !key.modifiers.contains(KeyModifiers::ALT)
+        && !key.modifiers.contains(KeyModifiers::SUPER)
+}
+
+fn is_ctrl_h_backspace(key: &KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Char('h'))
+        && key.modifiers.contains(KeyModifiers::CONTROL)
+        && !key.modifiers.contains(KeyModifiers::ALT)
+        && !key.modifiers.contains(KeyModifiers::SUPER)
 }
 
 fn should_scroll_with_arrows(_app: &App) -> bool {

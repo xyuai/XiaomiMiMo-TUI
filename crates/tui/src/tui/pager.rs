@@ -78,6 +78,11 @@ impl PagerView {
         Self::new(title, lines)
     }
 
+    #[cfg(test)]
+    pub fn plain_text(&self) -> String {
+        self.plain_lines.join("\n")
+    }
+
     fn scroll_up(&mut self, amount: usize) {
         self.scroll = self.scroll.saturating_sub(amount);
     }

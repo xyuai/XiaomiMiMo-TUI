@@ -1335,6 +1335,7 @@ background: true, then poll with task_shell_wait or exec_shell_wait.";
 async fn execute_foreground_via_background(
     context: &ToolContext,
     command: &str,
+    working_dir: Option<&str>,
     timeout_ms: u64,
     stdin_data: Option<&str>,
     policy_override: Option<ExecutionSandboxPolicy>,
@@ -1348,7 +1349,7 @@ async fn execute_foreground_via_background(
         manager.clear_foreground_background_request();
         manager.execute_with_options(
             command,
-            None,
+            working_dir,
             timeout_ms,
             true,
             stdin_data,
@@ -1560,11 +1561,21 @@ impl ToolSpec for ExecShellTool {
         }
 
         let policy_override = context.elevated_sandbox_policy.clone();
-        let working_dir = input
+        let working_dir = match input
             .get("cwd")
             .or_else(|| input.get("working_dir"))
             .and_then(serde_json::Value::as_str)
-            .map(str::to_string);
+        {
+            Some(dir) => {
+                // Validate cwd against the same workspace/trust boundary used
+                // by file tools. In trust mode this still follows
+                // ToolContext::resolve_path semantics and may allow external
+                // paths explicitly trusted by the user.
+                let resolved = context.resolve_path(dir)?;
+                Some(resolved.to_string_lossy().to_string())
+            }
+            None => None,
+        };
 
         let result = if interactive {
             let mut manager = context
@@ -1595,6 +1606,7 @@ impl ToolSpec for ExecShellTool {
             execute_foreground_via_background(
                 context,
                 command,
+                working_dir.as_deref(),
                 timeout_ms,
                 stdin_data.as_deref(),
                 policy_override,
