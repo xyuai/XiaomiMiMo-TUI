@@ -48,6 +48,7 @@ pub(super) struct ToolExecutionPlan {
     pub(super) supports_parallel: bool,
     pub(super) read_only: bool,
     pub(super) blocked_error: Option<ToolError>,
+    pub(super) guard_result: Option<ToolResult>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -99,7 +100,11 @@ pub(super) fn parse_tool_input(buffer: &str) -> Option<serde_json::Value> {
     if trimmed.is_empty() {
         return None;
     }
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+    // Try the deterministic arg-repair ladder first. It still returns strict
+    // parses unchanged, but also handles common streamed-tool issues such as
+    // trailing commas, unclosed braces, and literal control characters inside
+    // JSON strings.
+    if let Ok(value) = crate::tools::arg_repair::repair(trimmed) {
         return Some(value);
     }
     if let Some(stripped) = strip_code_fences(trimmed)

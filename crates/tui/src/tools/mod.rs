@@ -2,6 +2,7 @@
 
 pub mod apply_patch;
 pub mod approval_cache;
+pub mod arg_repair;
 pub mod automation;
 pub mod diagnostics;
 pub mod file;
@@ -20,6 +21,7 @@ pub mod registry;
 pub mod revert_turn;
 pub mod review;
 pub mod rlm;
+pub mod schema_sanitize;
 pub mod search;
 pub mod shell;
 mod shell_output;

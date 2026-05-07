@@ -7,13 +7,14 @@
 //! - Filtering by capability
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use serde_json::Value;
 
 use crate::client::XiaomiMiMoClient;
 use crate::models::Tool;
 
+use super::schema_sanitize;
 use super::spec::{
     ApprovalRequirement, ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec,
 };
@@ -24,6 +25,10 @@ use super::spec::{
 pub struct ToolRegistry {
     tools: HashMap<String, Arc<dyn ToolSpec>>,
     context: ToolContext,
+    /// Memoized serialized tool catalog. Rebuilt lazily after mutations and
+    /// emitted in a deterministic order so XiaomiMiMo-compatible prompt caches
+    /// see byte-stable tool definitions across turns and resumes.
+    api_cache: OnceLock<Vec<Tool>>,
 }
 
 impl ToolRegistry {
@@ -33,6 +38,7 @@ impl ToolRegistry {
         Self {
             tools: HashMap::new(),
             context,
+            api_cache: OnceLock::new(),
         }
     }
 
@@ -42,6 +48,7 @@ impl ToolRegistry {
         if self.tools.insert(name.clone(), tool).is_some() {
             tracing::warn!("Overwriting existing tool: {}", name);
         }
+        self.invalidate_api_cache();
     }
 
     /// Register multiple tools at once.
@@ -133,22 +140,45 @@ impl ToolRegistry {
     }
 
     /// Convert all tools to API Tool format for sending to the model.
+    ///
+    /// The output is sorted by tool name and memoized. `HashMap` iteration is
+    /// randomly seeded per process, so emitting tools directly from
+    /// `values()` would make the tool catalog order drift between launches and
+    /// reduce XiaomiMiMo-compatible prompt-cache reuse. Sampling each tool's
+    /// description/schema once per registry mutation also avoids mid-session
+    /// schema drift from MCP adapters.
     #[must_use]
     pub fn to_api_tools(&self) -> Vec<Tool> {
-        self.tools
-            .values()
-            .map(|tool| Tool {
-                tool_type: None,
-                name: tool.name().to_string(),
-                description: tool.description().to_string(),
-                input_schema: tool.input_schema(),
-                allowed_callers: Some(vec!["direct".to_string()]),
-                defer_loading: Some(tool.defer_loading()),
-                input_examples: None,
-                strict: None,
-                cache_control: None,
+        self.api_cache
+            .get_or_init(|| self.build_api_tools())
+            .clone()
+    }
+
+    fn build_api_tools(&self) -> Vec<Tool> {
+        let mut tools: Vec<&Arc<dyn ToolSpec>> = self.tools.values().collect();
+        tools.sort_by(|a, b| a.name().cmp(b.name()));
+        tools
+            .into_iter()
+            .map(|tool| {
+                let mut schema = tool.input_schema();
+                schema_sanitize::sanitize(&mut schema);
+                Tool {
+                    tool_type: None,
+                    name: tool.name().to_string(),
+                    description: tool.description().to_string(),
+                    input_schema: schema,
+                    allowed_callers: Some(vec!["direct".to_string()]),
+                    defer_loading: Some(tool.defer_loading()),
+                    input_examples: None,
+                    strict: None,
+                    cache_control: None,
+                }
             })
             .collect()
+    }
+
+    fn invalidate_api_cache(&mut self) {
+        self.api_cache = OnceLock::new();
     }
 
     /// Convert tools to API Tool format with optional cache control on the last tool.
@@ -230,13 +260,69 @@ impl ToolRegistry {
     #[must_use]
     #[allow(dead_code)]
     pub fn remove(&mut self, name: &str) -> Option<Arc<dyn ToolSpec>> {
-        self.tools.remove(name)
+        let removed = self.tools.remove(name);
+        if removed.is_some() {
+            self.invalidate_api_cache();
+        }
+        removed
+    }
+
+    /// Resolve a non-canonical tool name to a registered canonical name.
+    ///
+    /// Handles common model emissions such as `ReadFile`, `read-file`, or
+    /// `read_file_tool` by trying lowercase, separator normalization,
+    /// CamelCase-to-snake_case, suffix stripping, and a conservative
+    /// prefix/suffix fuzzy match.
+    #[must_use]
+    pub fn resolve(&self, requested: &str) -> Option<&str> {
+        let names: Vec<&str> = self.tools.keys().map(String::as_str).collect();
+        let lower = requested.to_lowercase();
+
+        if let Some(n) = names.iter().find(|n| n.to_lowercase() == lower) {
+            return Some(n);
+        }
+
+        let snaked = lower.replace(['-', ' '], "_");
+        if let Some(n) = names.iter().find(|n| **n == snaked) {
+            return Some(n);
+        }
+
+        let cc = to_snake_case(requested);
+        if let Some(n) = names.iter().find(|n| **n == cc) {
+            return Some(n);
+        }
+
+        let mut stripped = cc.clone();
+        for _ in 0..2 {
+            for suf in ["_tool", "-tool", "tool"] {
+                if let Some(s) = stripped.strip_suffix(suf) {
+                    stripped = s.to_string();
+                    break;
+                }
+            }
+        }
+        if !stripped.is_empty()
+            && let Some(n) = names.iter().find(|n| **n == stripped)
+        {
+            return Some(n);
+        }
+
+        if lower.len() >= 3 {
+            for n in &names {
+                if n.len() >= 3 && (n.starts_with(&lower) || lower.starts_with(n)) {
+                    return Some(n);
+                }
+            }
+        }
+
+        None
     }
 
     /// Clear all tools from the registry.
     #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.tools.clear();
+        self.invalidate_api_cache();
     }
 }
 
@@ -671,6 +757,22 @@ impl Default for ToolRegistryBuilder {
     }
 }
 
+/// Convert CamelCase to snake_case.
+fn to_snake_case(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 4);
+    for (i, ch) in s.chars().enumerate() {
+        if ch.is_uppercase() {
+            if i > 0 {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
 /// Adapter that wraps an MCP tool definition so it can live in the
 /// unified `ToolRegistry` alongside native tools (§5.B).
 #[allow(dead_code)]
@@ -839,6 +941,51 @@ mod tests {
         assert_eq!(api_tools.len(), 1);
         assert_eq!(api_tools[0].name, "my_tool");
         assert_eq!(api_tools[0].description, "A test tool");
+    }
+
+    #[test]
+    fn to_api_tools_emits_stable_sorted_order() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+
+        let order_a = {
+            let mut registry = ToolRegistry::new(ctx.clone());
+            registry.register(make_test_tool("zebra"));
+            registry.register(make_test_tool("alpha"));
+            registry.register(make_test_tool("mango"));
+            registry
+                .to_api_tools()
+                .iter()
+                .map(|tool| tool.name.clone())
+                .collect::<Vec<_>>()
+        };
+
+        let order_b = {
+            let mut registry = ToolRegistry::new(ctx);
+            registry.register(make_test_tool("alpha"));
+            registry.register(make_test_tool("mango"));
+            registry.register(make_test_tool("zebra"));
+            registry
+                .to_api_tools()
+                .iter()
+                .map(|tool| tool.name.clone())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(order_a, vec!["alpha", "mango", "zebra"]);
+        assert_eq!(order_a, order_b);
+    }
+
+    #[test]
+    fn resolve_recovers_common_tool_name_variants() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+        let mut registry = ToolRegistry::new(ctx);
+        registry.register(make_test_tool("read_file"));
+
+        assert_eq!(registry.resolve("ReadFile"), Some("read_file"));
+        assert_eq!(registry.resolve("read-file"), Some("read_file"));
+        assert_eq!(registry.resolve("read_file_tool"), Some("read_file"));
     }
 
     #[test]

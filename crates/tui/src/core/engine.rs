@@ -2854,13 +2854,9 @@ impl Engine {
 pub fn spawn_engine(config: EngineConfig, api_config: &Config) -> EngineHandle {
     let (engine, handle) = Engine::new(config, api_config);
 
-    crate::utils::spawn_supervised(
-        "engine",
-        std::panic::Location::caller(),
-        async move {
-            engine.run().await;
-        },
-    );
+    crate::utils::spawn_supervised("engine", std::panic::Location::caller(), async move {
+        engine.run().await;
+    });
 
     handle
 }
@@ -2934,6 +2930,7 @@ pub(crate) fn mock_engine_handle() -> MockEngineHandle {
 mod approval;
 mod capacity_flow;
 mod dispatch;
+mod loop_guard;
 mod turn_loop;
 
 use self::approval::{ApprovalDecision, ApprovalResult, UserInputDecision};
@@ -2943,6 +2940,7 @@ use self::dispatch::{
     mcp_tool_is_read_only, parse_parallel_tool_calls, parse_tool_input,
     should_force_update_plan_first, should_parallelize_tool_batch, should_stop_after_plan_tool,
 };
+use self::loop_guard::{AttemptDecision, LoopGuard, OutcomeDecision};
 
 #[cfg(test)]
 mod tests;

@@ -71,6 +71,20 @@ use crate::models::{ContentBlock, Message, MessageRequest, SystemPrompt};
 use crate::session_manager::{SessionManager, create_saved_session};
 use crate::tui::history::{summarize_tool_args, summarize_tool_output};
 
+#[cfg(windows)]
+fn configure_windows_console_utf8() {
+    use windows::Win32::System::Console::{SetConsoleCP, SetConsoleOutputCP};
+
+    const CP_UTF8: u32 = 65001;
+    unsafe {
+        let _ = SetConsoleCP(CP_UTF8);
+        let _ = SetConsoleOutputCP(CP_UTF8);
+    }
+}
+
+#[cfg(not(windows))]
+fn configure_windows_console_utf8() {}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "xiaomimimo",
@@ -553,6 +567,8 @@ enum SandboxCommand {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    configure_windows_console_utf8();
+
     // Set up process panic hook before anything else. Besides delegating to
     // the default hook, it restores terminal modes that a crashing TUI can
     // otherwise leak into the parent shell: raw mode, alt-screen, bracketed
@@ -718,12 +734,14 @@ async fn main() -> Result<()> {
             }
             Commands::Resume { session_id, last } => {
                 let config = load_config_from_cli(&cli)?;
-                let resume_id = resolve_session_id(session_id, last)?;
+                let workspace = resolve_workspace(&cli);
+                let resume_id = resolve_session_id(session_id, last, Some(&workspace))?;
                 run_interactive(&cli, &config, Some(resume_id)).await
             }
             Commands::Fork { session_id, last } => {
                 let config = load_config_from_cli(&cli)?;
-                let new_session_id = fork_session(session_id, last)?;
+                let workspace = resolve_workspace(&cli);
+                let new_session_id = fork_session(session_id, last, Some(&workspace))?;
                 run_interactive(&cli, &config, Some(new_session_id)).await
             }
             Commands::ResponsesApiProxy(args) => {
@@ -742,9 +760,14 @@ async fn main() -> Result<()> {
 
     // Handle session resume
     let resume_session_id = if cli.continue_session {
-        // Get most recent session
+        // Get most recent session in this workspace scope.
+        let workspace = resolve_workspace(&cli);
         match session_manager::SessionManager::default_location() {
-            Ok(manager) => manager.get_latest_session().ok().flatten().map(|m| m.id),
+            Ok(manager) => manager
+                .get_latest_session_for_workspace(&workspace)
+                .ok()
+                .flatten()
+                .map(|m| m.id),
             Err(_) => None,
         }
     } else {
@@ -2469,8 +2492,22 @@ fn run_logout() -> Result<()> {
     Ok(())
 }
 
-fn resolve_session_id(session_id: Option<String>, last: bool) -> Result<String> {
+fn resolve_session_id(
+    session_id: Option<String>,
+    last: bool,
+    workspace: Option<&Path>,
+) -> Result<String> {
     if last {
+        if let Some(workspace) = workspace {
+            let manager = SessionManager::default_location()?;
+            let Some(meta) = manager.get_latest_session_for_workspace(workspace)? else {
+                bail!(
+                    "No saved sessions found for workspace {}.",
+                    workspace.display()
+                );
+            };
+            return Ok(meta.id);
+        }
         return Ok("latest".to_string());
     }
     if let Some(id) = session_id {
@@ -2479,15 +2516,29 @@ fn resolve_session_id(session_id: Option<String>, last: bool) -> Result<String> 
     pick_session_id()
 }
 
-fn fork_session(session_id: Option<String>, last: bool) -> Result<String> {
+fn fork_session(
+    session_id: Option<String>,
+    last: bool,
+    workspace: Option<&Path>,
+) -> Result<String> {
     let manager = SessionManager::default_location()?;
     let saved = if last {
-        let Some(meta) = manager.get_latest_session()? else {
-            bail!("No saved sessions found.");
+        let workspace_buf;
+        let workspace = if let Some(workspace) = workspace {
+            workspace
+        } else {
+            workspace_buf = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            workspace_buf.as_path()
+        };
+        let Some(meta) = manager.get_latest_session_for_workspace(workspace)? else {
+            bail!(
+                "No saved sessions found for workspace {}.",
+                workspace.display()
+            );
         };
         manager.load_session(&meta.id)?
     } else {
-        let id = resolve_session_id(session_id, false)?;
+        let id = resolve_session_id(session_id, false, None)?;
         manager.load_session_by_prefix(&id)?
     };
 
@@ -3145,7 +3196,11 @@ fn should_use_mouse_capture(cli: &Cli, config: &Config, use_alt_screen: bool) ->
         .tui
         .as_ref()
         .and_then(|tui| tui.mouse_capture)
-        .unwrap_or(true)
+        .unwrap_or_else(default_mouse_capture_enabled)
+}
+
+fn default_mouse_capture_enabled() -> bool {
+    !cfg!(windows)
 }
 
 fn is_zellij() -> bool {
@@ -3559,11 +3614,21 @@ mod terminal_mode_tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn mouse_capture_defaults_on_when_alternate_screen_is_active() {
         let cli = parse_cli(&["xiaomimimo"]);
         let config = Config::default();
 
         assert!(should_use_mouse_capture(&cli, &config, true));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn mouse_capture_defaults_off_on_windows_when_alternate_screen_is_active() {
+        let cli = parse_cli(&["xiaomimimo"]);
+        let config = Config::default();
+
+        assert!(!should_use_mouse_capture(&cli, &config, true));
     }
 
     #[test]
@@ -3595,6 +3660,29 @@ mod terminal_mode_tests {
         let config = Config::default();
 
         assert!(!should_use_mouse_capture(&cli, &config, false));
+    }
+
+    #[test]
+    fn mouse_capture_flag_enables_mouse_capture() {
+        let cli = parse_cli(&["xiaomimimo", "--mouse-capture"]);
+        let config = Config::default();
+
+        assert!(should_use_mouse_capture(&cli, &config, true));
+    }
+
+    #[test]
+    fn config_can_enable_mouse_capture() {
+        let cli = parse_cli(&["xiaomimimo"]);
+        let config = Config {
+            tui: Some(crate::config::TuiConfig {
+                alternate_screen: None,
+                mouse_capture: Some(true),
+                status_items: None,
+            }),
+            ..Config::default()
+        };
+
+        assert!(should_use_mouse_capture(&cli, &config, true));
     }
 }
 

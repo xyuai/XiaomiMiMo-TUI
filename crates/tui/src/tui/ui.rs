@@ -187,8 +187,10 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
         // Try to load by prefix or full ID
         let load_result: std::io::Result<Option<crate::session_manager::SavedSession>> =
             if session_id == "latest" {
-                // Special case: resume the most recent session
-                match manager.get_latest_session() {
+                // Special case: resume the most recent session in this
+                // workspace scope. Avoids accidentally pulling context from a
+                // different project when users run `--continue` / `resume --last`.
+                match manager.get_latest_session_for_workspace(&options.workspace) {
                     Ok(Some(meta)) => manager.load_session(&meta.id).map(Some),
                     Ok(None) => Ok(None),
                     Err(e) => Err(e),
@@ -238,6 +240,71 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
             }
             Err(e) => {
                 app.status_message = Some(format!("Failed to load session: {e}"));
+            }
+        }
+    }
+
+    // Recover an in-flight checkpoint only when it belongs to this workspace.
+    // A global checkpoint from another project must not silently overwrite the
+    // current XiaomiMiMo session. If it is stale/cross-workspace, keep it from
+    // reappearing forever by saving it as a normal session and clearing the
+    // checkpoint.
+    if options.resume_session_id.is_none()
+        && let Ok(manager) = SessionManager::default_location()
+    {
+        match manager.load_checkpoint() {
+            Ok(Some(saved))
+                if crate::session_manager::workspace_scope_matches(
+                    &saved.metadata.workspace,
+                    &options.workspace,
+                ) =>
+            {
+                app.api_messages.clone_from(&saved.messages);
+                app.model.clone_from(&saved.metadata.model);
+                app.update_model_compaction_budget();
+                app.workspace.clone_from(&saved.metadata.workspace);
+                app.current_session_id = Some(saved.metadata.id.clone());
+                app.total_tokens = u32::try_from(saved.metadata.total_tokens).unwrap_or(u32::MAX);
+                app.total_conversation_tokens = app.total_tokens;
+                app.last_prompt_tokens = None;
+                app.last_completion_tokens = None;
+                app.last_prompt_cache_hit_tokens = None;
+                app.last_prompt_cache_miss_tokens = None;
+                app.last_reasoning_replay_tokens = None;
+                if let Some(prompt) = saved.system_prompt {
+                    app.system_prompt = Some(SystemPrompt::Text(prompt));
+                }
+                app.clear_history();
+                app.push_history_cell(HistoryCell::System {
+                    content: format!(
+                        "Recovered in-flight session: {} ({})",
+                        saved.metadata.title,
+                        &saved.metadata.id[..8.min(saved.metadata.id.len())]
+                    ),
+                });
+                for msg in &saved.messages {
+                    app.extend_history(history_cells_from_message(msg));
+                }
+                app.mark_history_updated();
+                if app.status_message.is_none() {
+                    app.status_message = Some("Recovered in-flight session checkpoint".to_string());
+                }
+            }
+            Ok(Some(saved)) => {
+                let _ = manager.save_session(&saved);
+                let _ = manager.clear_checkpoint();
+                if app.status_message.is_none() {
+                    app.status_message = Some(format!(
+                        "Skipped checkpoint from different workspace: {}",
+                        saved.metadata.workspace.display()
+                    ));
+                }
+            }
+            Ok(None) => {}
+            Err(err) => {
+                if app.status_message.is_none() {
+                    app.status_message = Some(format!("Failed to inspect checkpoint: {err}"));
+                }
             }
         }
     }
@@ -6326,8 +6393,15 @@ fn details_shortcut_modifiers(modifiers: KeyModifiers) -> bool {
 
 fn is_paste_shortcut(key: &KeyEvent) -> bool {
     let is_v = matches!(key.code, KeyCode::Char('v') | KeyCode::Char('V'));
-    if !is_v {
+    let is_legacy_ctrl_v = matches!(key.code, KeyCode::Char('\u{16}'));
+    if !is_v && !is_legacy_ctrl_v {
         return false;
+    }
+
+    // Some Windows terminals deliver Ctrl+V as the literal SYN control
+    // character instead of `Char('v')` + CONTROL.
+    if is_legacy_ctrl_v {
+        return true;
     }
 
     // Cmd+V on macOS

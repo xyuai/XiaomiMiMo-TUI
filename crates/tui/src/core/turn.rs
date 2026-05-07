@@ -150,6 +150,14 @@ pub fn post_turn_snapshot(workspace: &Path, turn_seq: u64) -> Option<String> {
 }
 
 fn snapshot_with_label(workspace: &Path, label: &str) -> Option<String> {
+    if is_dangerous_snapshot_workspace(workspace) {
+        tracing::warn!(
+            target: "snapshot",
+            workspace = %workspace.display(),
+            "snapshot '{label}' skipped for unsafe workspace root"
+        );
+        return None;
+    }
     match SnapshotRepo::open_or_init(workspace) {
         Ok(repo) => match repo.snapshot(label) {
             Ok(id) => Some(id.0),
@@ -162,6 +170,25 @@ fn snapshot_with_label(workspace: &Path, label: &str) -> Option<String> {
             tracing::warn!(target: "snapshot", "snapshot repo init failed: {e}");
             None
         }
+    }
+}
+
+fn is_dangerous_snapshot_workspace(workspace: &Path) -> bool {
+    let canonical = std::fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
+
+    if let Some(home) = dirs::home_dir()
+        && paths_equal_or_same_text(&canonical, &home)
+    {
+        return true;
+    }
+
+    canonical.parent().is_none()
+}
+
+fn paths_equal_or_same_text(lhs: &Path, rhs: &Path) -> bool {
+    match (std::fs::canonicalize(lhs), std::fs::canonicalize(rhs)) {
+        (Ok(lhs), Ok(rhs)) => lhs == rhs,
+        _ => lhs == rhs,
     }
 }
 

@@ -14,9 +14,9 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0.100"
 arboard = "3.4"
-xiaomimimo-tui-cli = { path = "../cli", version = "0.6.3" }
-xiaomimimo-secrets = { path = "../secrets", version = "0.6.3" }
-xiaomimimo-tools = { path = "../tools", version = "0.6.3" }
+xiaomimimo-tui-cli = { path = "../cli", version = "0.6.4" }
+xiaomimimo-secrets = { path = "../secrets", version = "0.6.4" }
+xiaomimimo-tools = { path = "../tools", version = "0.6.4" }
 async-stream = "0.3.6"
 async-trait = "0.1"
 bytes = "1.11.0"
@@ -75,4 +75,4 @@ libc = "0.2"
 libc = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.60", features = ["Win32_Foundation"] }
+windows = { version = "0.60", features = ["Win32_Foundation", "Win32_System_Console"] }

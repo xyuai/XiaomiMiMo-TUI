@@ -33,6 +33,7 @@ fn make_plan(
         supports_parallel,
         read_only,
         blocked_error: None,
+        guard_result: None,
     }
 }
 
@@ -940,6 +941,12 @@ fn final_tool_input_falls_back_to_initial_when_buffer_unparseable() {
     // whatever the per-delta parser last accepted (mirrored into `input`).
     let state = tool_state(json!({"command": "echo hi"}), "{not json");
     assert_eq!(final_tool_input(&state), json!({"command": "echo hi"}));
+}
+
+#[test]
+fn final_tool_input_repairs_trailing_comma() {
+    let state = tool_state(json!({}), r#"{"command": "ls -la",}"#);
+    assert_eq!(final_tool_input(&state), json!({"command": "ls -la"}));
 }
 
 // === #103 transparent stream-retry policy =====================================

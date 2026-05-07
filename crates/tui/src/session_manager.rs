@@ -349,9 +349,21 @@ impl SessionManager {
     }
 
     /// Get the most recent session
+    #[allow(dead_code)]
     pub fn get_latest_session(&self) -> std::io::Result<Option<SessionMetadata>> {
         let sessions = self.list_sessions()?;
         Ok(sessions.into_iter().next())
+    }
+
+    /// Get the most recent session scoped to the current workspace.
+    pub fn get_latest_session_for_workspace(
+        &self,
+        workspace: &Path,
+    ) -> std::io::Result<Option<SessionMetadata>> {
+        let sessions = self.list_sessions()?;
+        Ok(sessions
+            .into_iter()
+            .find(|session| workspace_scope_matches(&session.workspace, workspace)))
     }
 
     /// Search sessions by title
@@ -363,6 +375,47 @@ impl SessionManager {
             .into_iter()
             .filter(|s| s.title.to_lowercase().contains(&query_lower))
             .collect())
+    }
+}
+
+/// Return true when a saved workspace belongs to the current workspace scope.
+///
+/// Exact canonical-path matches are accepted. If both paths live inside Git
+/// worktrees, matching Git roots are also accepted so `repo/` and `repo/crate/`
+/// resume the same project while unrelated workspaces remain isolated.
+pub fn workspace_scope_matches(saved_workspace: &Path, current_workspace: &Path) -> bool {
+    if paths_equivalent(saved_workspace, current_workspace) {
+        return true;
+    }
+
+    match (
+        find_git_root(saved_workspace),
+        find_git_root(current_workspace),
+    ) {
+        (Some(saved_root), Some(current_root)) => paths_equivalent(&saved_root, &current_root),
+        _ => false,
+    }
+}
+
+fn paths_equivalent(lhs: &Path, rhs: &Path) -> bool {
+    let lhs_canonical = fs::canonicalize(lhs).ok();
+    let rhs_canonical = fs::canonicalize(rhs).ok();
+    match (lhs_canonical, rhs_canonical) {
+        (Some(lhs), Some(rhs)) => lhs == rhs,
+        _ => lhs == rhs,
+    }
+}
+
+fn find_git_root(path: &Path) -> Option<PathBuf> {
+    let mut current = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    loop {
+        if current.join(".git").exists() {
+            return Some(current);
+        }
+        match current.parent() {
+            Some(parent) if parent != current => current = parent.to_path_buf(),
+            _ => return None,
+        }
     }
 }
 
@@ -588,6 +641,72 @@ mod tests {
 
         let sessions = manager.list_sessions().expect("list");
         assert_eq!(sessions.len(), 3);
+    }
+
+    #[test]
+    fn latest_session_for_workspace_ignores_other_projects() {
+        let tmp = tempdir().expect("tempdir");
+        let manager = SessionManager::new(tmp.path().join("sessions")).expect("new");
+        let workspace_a = tmp.path().join("project-a");
+        let workspace_b = tmp.path().join("project-b");
+        fs::create_dir_all(&workspace_a).expect("workspace a");
+        fs::create_dir_all(&workspace_b).expect("workspace b");
+
+        let mut old = create_saved_session(
+            &[make_test_message("user", "a")],
+            "test-model",
+            &workspace_a,
+            0,
+            None,
+        );
+        old.metadata.id = "current-workspace".to_string();
+        old.metadata.updated_at = Utc::now() - chrono::Duration::minutes(10);
+        manager.save_session(&old).expect("save old");
+
+        let mut newest_elsewhere = create_saved_session(
+            &[make_test_message("user", "b")],
+            "test-model",
+            &workspace_b,
+            0,
+            None,
+        );
+        newest_elsewhere.metadata.id = "other-workspace".to_string();
+        newest_elsewhere.metadata.updated_at = Utc::now();
+        manager
+            .save_session(&newest_elsewhere)
+            .expect("save newest elsewhere");
+
+        let scoped = manager
+            .get_latest_session_for_workspace(&workspace_a)
+            .expect("latest for workspace")
+            .expect("scoped latest");
+        assert_eq!(scoped.id, "current-workspace");
+    }
+
+    #[test]
+    fn latest_session_for_workspace_matches_same_git_repository() {
+        let tmp = tempdir().expect("tempdir");
+        let manager = SessionManager::new(tmp.path().join("sessions")).expect("new");
+        let repo = tmp.path().join("repo");
+        let repo_crate = repo.join("crates").join("tui");
+        fs::create_dir_all(repo.join(".git")).expect("git dir");
+        fs::create_dir_all(&repo_crate).expect("crate dir");
+
+        let mut saved = create_saved_session(
+            &[make_test_message("user", "repo")],
+            "test-model",
+            &repo,
+            0,
+            None,
+        );
+        saved.metadata.id = "same-repo".to_string();
+        manager.save_session(&saved).expect("save same repo");
+
+        let scoped = manager
+            .get_latest_session_for_workspace(&repo_crate)
+            .expect("latest for workspace")
+            .expect("same repo latest");
+        assert_eq!(scoped.id, "same-repo");
     }
 
     #[test]
