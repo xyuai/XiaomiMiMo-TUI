@@ -1474,7 +1474,7 @@ fn env_config_path() -> Option<PathBuf> {
     if let Ok(path) = std::env::var("XIAOMIMIMO_CONFIG_PATH") {
         let trimmed = path.trim();
         if !trimmed.is_empty() {
-            return Some(expand_path(trimmed));
+            return Some(expand_path_with_config_env_home(trimmed, None));
         }
     }
     None
@@ -1532,6 +1532,21 @@ fn default_requirements_path() -> Option<PathBuf> {
 }
 
 pub(crate) fn expand_path(path: &str) -> PathBuf {
+    expand_path_with_config_env_home(path, env_home_from_config_path())
+}
+
+fn expand_path_with_config_env_home(path: &str, config_env_home: Option<PathBuf>) -> PathBuf {
+    if let Some(stripped) = path.strip_prefix('~')
+        && (stripped.is_empty() || stripped.starts_with('/') || stripped.starts_with('\\'))
+        && let Some(mut home) = config_env_home
+    {
+        let suffix = stripped.trim_start_matches(['/', '\\']);
+        if !suffix.is_empty() {
+            home.push(suffix);
+        }
+        return home;
+    }
+
     if let Some(stripped) = path.strip_prefix('~')
         && (stripped.is_empty() || stripped.starts_with('/') || stripped.starts_with('\\'))
         && let Some(mut home) = effective_home_dir()
@@ -1545,6 +1560,23 @@ pub(crate) fn expand_path(path: &str) -> PathBuf {
 
     let expanded = shellexpand::tilde(path);
     PathBuf::from(expanded.as_ref())
+}
+
+fn env_home_from_config_path() -> Option<PathBuf> {
+    std::env::var("XIAOMIMIMO_CONFIG_PATH")
+        .ok()
+        .and_then(|config_path| home_from_config_path(&config_path))
+}
+
+fn home_from_config_path(config_path: &str) -> Option<PathBuf> {
+    let trimmed = config_path.trim();
+    if trimmed.starts_with('~') {
+        return None;
+    }
+    Path::new(trimmed)
+        .parent()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
 }
 
 fn default_skills_dir() -> Option<PathBuf> {

@@ -25,6 +25,21 @@ pub enum ArgRepairError {
     TooLarge(usize),
 }
 
+/// Return true when the string looks like a JSON object/array fragment that is
+/// worth repairing. Arbitrary text should not be promoted to `{}` by callers
+/// that need to distinguish "unparseable" from "empty args".
+pub fn looks_repairable(raw: &str) -> bool {
+    let trimmed = raw.trim_start();
+    if !matches!(trimmed.as_bytes().first(), Some(b'{') | Some(b'[')) {
+        return false;
+    }
+
+    // Bare "{not json" is not a useful JSON fragment; repairing it to "{}"
+    // would hide the caller's previous valid input. Only attempt repair when
+    // the fragment contains at least one JSON-like structural marker.
+    trimmed.contains(':') || trimmed.contains('"') || trimmed.contains(']')
+}
+
 /// Repair a raw JSON argument string into a valid `serde_json::Value`.
 ///
 /// Runs the deterministic ladder; on success returns the parsed value.
@@ -233,6 +248,14 @@ mod tests {
     fn handles_gibberish() {
         let v = repair("not json at all").unwrap();
         assert_eq!(v, json!({}));
+    }
+
+    #[test]
+    fn detects_json_fragments_worth_repairing() {
+        assert!(looks_repairable(r#"{"path": "hello.txt""#));
+        assert!(looks_repairable(r#"["a", "b""#));
+        assert!(!looks_repairable("{not json"));
+        assert!(!looks_repairable("not json at all"));
     }
 
     #[test]

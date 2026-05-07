@@ -100,11 +100,16 @@ pub(super) fn parse_tool_input(buffer: &str) -> Option<serde_json::Value> {
     if trimmed.is_empty() {
         return None;
     }
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        return Some(value);
+    }
     // Try the deterministic arg-repair ladder first. It still returns strict
     // parses unchanged, but also handles common streamed-tool issues such as
     // trailing commas, unclosed braces, and literal control characters inside
     // JSON strings.
-    if let Ok(value) = crate::tools::arg_repair::repair(trimmed) {
+    if crate::tools::arg_repair::looks_repairable(trimmed)
+        && let Ok(value) = crate::tools::arg_repair::repair(trimmed)
+    {
         return Some(value);
     }
     if let Some(stripped) = strip_code_fences(trimmed)
