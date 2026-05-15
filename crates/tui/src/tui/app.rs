@@ -918,9 +918,12 @@ impl App {
         // Initialize plan state
         let plan_state = new_shared_plan_state();
 
+        let xiaomimimo_skills_dir = workspace.join(".xiaomimimo").join("skills");
         let agents_skills_dir = workspace.join(".agents").join("skills");
         let local_skills_dir = workspace.join("skills");
-        let skills_dir = if agents_skills_dir.exists() {
+        let skills_dir = if xiaomimimo_skills_dir.exists() {
+            xiaomimimo_skills_dir
+        } else if agents_skills_dir.exists() {
             agents_skills_dir
         } else if local_skills_dir.exists() {
             local_skills_dir

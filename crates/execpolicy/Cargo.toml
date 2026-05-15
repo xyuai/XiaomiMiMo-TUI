@@ -8,5 +8,5 @@ description = "Execution policy and approval model parity for XiaomiMiMo workspa
 
 [dependencies]
 anyhow.workspace = true
-xiaomimimo-protocol = { path = "../protocol", version = "0.6.8" }
+xiaomimimo-protocol = { path = "../protocol", version = "0.6.9" }
 serde.workspace = true

@@ -24,6 +24,7 @@ use crate::logging;
 
 const MAX_SKILL_DESCRIPTION_CHARS: usize = 512;
 const MAX_AVAILABLE_SKILLS_CHARS: usize = 12_000;
+pub const ACTIVE_SKILL_BODY_MAX_CHARS: usize = 48_000;
 
 // === Defaults ===
 
@@ -34,6 +35,33 @@ pub fn default_skills_dir() -> PathBuf {
         || PathBuf::from("/tmp/xiaomimimo/skills"),
         |p| p.join(".xiaomimimo").join("skills"),
     )
+}
+
+/// Workspace-local skills directory used ahead of configured/global skills.
+#[must_use]
+pub fn workspace_skills_dir(workspace: &Path) -> PathBuf {
+    workspace.join(".xiaomimimo").join("skills")
+}
+
+/// Build the ordered skill search path for a workspace.
+///
+/// Earlier directories win on duplicate skill names. Kept small and explicit
+/// so CLI/TUI/API callers can share the same precedence.
+#[must_use]
+pub fn skill_search_dirs(workspace: &Path, configured_dir: &Path) -> Vec<PathBuf> {
+    let mut dirs = vec![
+        workspace_skills_dir(workspace),
+        workspace.join(".agents").join("skills"),
+        workspace.join("skills"),
+        configured_dir.to_path_buf(),
+    ];
+    let global_dir = default_skills_dir();
+    dirs.push(global_dir);
+
+    let mut seen = std::collections::HashSet::new();
+    dirs.into_iter()
+        .filter(|dir| seen.insert(normalize_for_dedup(dir)))
+        .collect()
 }
 
 // === Types ===
@@ -94,6 +122,30 @@ impl SkillRegistry {
             registry.push_warning(format!("Failed to read skills directory {}", dir.display()));
         }
         registry
+    }
+
+    /// Discover skills from multiple directories in precedence order.
+    ///
+    /// The first directory that defines a skill name wins; later duplicates are
+    /// ignored so workspace-local skills can override global/system skills.
+    #[must_use]
+    pub fn discover_many<'a>(dirs: impl IntoIterator<Item = &'a Path>) -> Self {
+        let mut merged = Self::default();
+        let mut seen = std::collections::HashSet::new();
+
+        for dir in dirs {
+            let registry = Self::discover(dir);
+            for warning in registry.warnings {
+                merged.warnings.push(warning);
+            }
+            for skill in registry.skills {
+                if seen.insert(skill.name.clone()) {
+                    merged.skills.push(skill);
+                }
+            }
+        }
+
+        merged
     }
 
     fn push_warning(&mut self, warning: String) {
@@ -173,6 +225,38 @@ impl SkillRegistry {
     }
 }
 
+/// Render a stable, bounded instruction block for an activated skill.
+///
+/// Long skill files are truncated deterministically by preserving the start and
+/// end. This keeps the selected workspace skill present even in large projects
+/// while avoiding unbounded prompt growth.
+#[must_use]
+pub fn render_active_skill_instruction(skill: &Skill) -> String {
+    let body = truncate_skill_body_for_activation(&skill.body, ACTIVE_SKILL_BODY_MAX_CHARS);
+    format!(
+        "You are now using a skill. Follow these instructions:\n\n# Skill: {}\n\n{}\n\n---\n\nNow respond to the user's request following the above skill instructions.",
+        skill.name, body
+    )
+}
+
+fn truncate_skill_body_for_activation(body: &str, max_chars: usize) -> String {
+    if body.chars().count() <= max_chars {
+        return body.to_string();
+    }
+    let marker = "\n\n[... skill body truncated; preserving beginning and end ...]\n\n";
+    let marker_len = marker.chars().count();
+    if max_chars <= marker_len + 2 {
+        return body.chars().take(max_chars).collect();
+    }
+    let budget = max_chars - marker_len;
+    let head_len = budget / 2;
+    let tail_len = budget - head_len;
+    let head: String = body.chars().take(head_len).collect();
+    let tail_chars: Vec<char> = body.chars().rev().take(tail_len).collect();
+    let tail: String = tail_chars.into_iter().rev().collect();
+    format!("{head}{marker}{tail}")
+}
+
 /// Render a compact model-visible skills block.
 ///
 /// The full `SKILL.md` body is intentionally not included here. This mirrors
@@ -180,8 +264,25 @@ impl SkillRegistry {
 /// descriptions, and paths up front, then opens the specific `SKILL.md` only
 /// when a skill is relevant.
 #[must_use]
+#[allow(dead_code)]
 pub fn render_available_skills_context(skills_dir: &Path) -> Option<String> {
     let registry = SkillRegistry::discover(skills_dir);
+    render_available_skills_context_from_registry(registry)
+}
+
+/// Render a compact model-visible skills block from the shared workspace/global
+/// search path.
+#[must_use]
+pub fn render_available_skills_context_for_workspace(
+    workspace: &Path,
+    configured_dir: &Path,
+) -> Option<String> {
+    let dirs = skill_search_dirs(workspace, configured_dir);
+    let registry = SkillRegistry::discover_many(dirs.iter().map(PathBuf::as_path));
+    render_available_skills_context_from_registry(registry)
+}
+
+fn render_available_skills_context_from_registry(registry: SkillRegistry) -> Option<String> {
     if registry.is_empty() {
         return None;
     }
@@ -247,6 +348,10 @@ instructions when using a specific skill.\n\n",
     );
 
     Some(out)
+}
+
+fn normalize_for_dedup(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn truncate_for_prompt(value: &str, max_chars: usize) -> String {
@@ -444,5 +549,47 @@ mod tests {
             rendered.chars().count() < super::MAX_AVAILABLE_SKILLS_CHARS + 4_000,
             "rendered length should stay near the budget"
         );
+    }
+
+    #[test]
+    fn discover_many_uses_workspace_precedence() {
+        let tmpdir = TempDir::new().unwrap();
+        let workspace = tmpdir.path().join("workspace");
+        let global = tmpdir.path().join("global");
+        std::fs::create_dir_all(workspace.join("dupe")).unwrap();
+        std::fs::create_dir_all(global.join("dupe")).unwrap();
+        std::fs::write(
+            workspace.join("dupe").join("SKILL.md"),
+            "---\nname: dupe\ndescription: workspace\n---\nworkspace body",
+        )
+        .unwrap();
+        std::fs::write(
+            global.join("dupe").join("SKILL.md"),
+            "---\nname: dupe\ndescription: global\n---\nglobal body",
+        )
+        .unwrap();
+
+        let registry =
+            crate::skills::SkillRegistry::discover_many([workspace.as_path(), global.as_path()]);
+        let skill = registry.get("dupe").expect("skill");
+        assert_eq!(skill.description, "workspace");
+        assert_eq!(skill.body, "workspace body");
+    }
+
+    #[test]
+    fn active_skill_instruction_is_bounded_and_stable() {
+        let body = format!(
+            "---\nname: huge\ndescription: Huge skill\n---\n{}MIDDLE{}",
+            "A".repeat(super::ACTIVE_SKILL_BODY_MAX_CHARS),
+            "Z".repeat(super::ACTIVE_SKILL_BODY_MAX_CHARS)
+        );
+        let path = std::path::PathBuf::from("SKILL.md");
+        let skill = crate::skills::SkillRegistry::parse_skill(&path, &body).unwrap();
+        let rendered = crate::skills::render_active_skill_instruction(&skill);
+
+        assert!(rendered.contains("A"));
+        assert!(rendered.contains("Z"));
+        assert!(rendered.contains("skill body truncated"));
+        assert!(rendered.chars().count() < super::ACTIVE_SKILL_BODY_MAX_CHARS + 512);
     }
 }

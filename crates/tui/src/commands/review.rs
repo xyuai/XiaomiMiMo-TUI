@@ -1,6 +1,6 @@
 //! Review command: activate review skill and send a target immediately.
 
-use crate::skills::{SkillRegistry, default_skills_dir};
+use crate::skills::{SkillRegistry, render_active_skill_instruction, skill_search_dirs};
 use crate::tui::app::{App, AppAction};
 use crate::tui::history::HistoryCell;
 
@@ -20,39 +20,27 @@ pub fn review(app: &mut App, args: Option<&str>) -> CommandResult {
         return CommandResult::error("用法：/review <target>");
     }
 
-    let skills_dir = app.skills_dir.clone();
-    let registry = SkillRegistry::discover(&skills_dir);
-    let mut warnings = warnings_suffix(&registry);
-    let mut skill = registry.get("review").cloned();
-
-    let global_dir = default_skills_dir();
-    if skill.is_none() && global_dir != skills_dir {
-        let registry = SkillRegistry::discover(&global_dir);
-        if warnings.is_empty() {
-            warnings = warnings_suffix(&registry);
-        } else if !registry.warnings().is_empty() {
-            warnings.push_str(&format!("\n- {}", registry.warnings().join("\n- ")));
-        }
-        skill = registry.get("review").cloned();
-    }
+    let search_dirs = skill_search_dirs(&app.workspace, &app.skills_dir);
+    let registry =
+        SkillRegistry::discover_many(search_dirs.iter().map(std::path::PathBuf::as_path));
+    let warnings = warnings_suffix(&registry);
+    let skill = registry.get("review").cloned();
 
     let skill = match skill {
         Some(skill) => skill,
         None => {
-            let global_display = global_dir.display();
+            let locations = search_dirs
+                .iter()
+                .map(|dir| format!("  {}", dir.display()))
+                .collect::<Vec<_>>()
+                .join("\n");
             return CommandResult::error(format!(
-                "在 {} 或 {} 中未找到 review 技能。请创建 ~/.xiaomimimo/skills/review/SKILL.md。{}",
-                skills_dir.display(),
-                global_display,
-                warnings
+                "Review skill was not found. Search locations:\n{locations}\nCreate .xiaomimimo/skills/review/SKILL.md.{warnings}",
             ));
         }
     };
 
-    let instruction = format!(
-        "You are now using a skill. Follow these instructions:\n\n# Skill: {}\n\n{}\n\n---\n\nNow respond to the user's request following the above skill instructions.",
-        skill.name, skill.body
-    );
+    let instruction = render_active_skill_instruction(&skill);
 
     app.add_message(HistoryCell::System {
         content: format!("已激活技能：{}\n\n{}", skill.name, skill.description),

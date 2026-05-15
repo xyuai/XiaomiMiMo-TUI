@@ -15,7 +15,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::commands;
 use crate::palette;
-use crate::skills::SkillRegistry;
+use crate::skills::{SkillRegistry, skill_search_dirs};
 use crate::tools::spec::ApprovalRequirement;
 use crate::tools::spec::ToolCapability;
 use crate::tools::{ToolContext, ToolRegistryBuilder};
@@ -77,7 +77,8 @@ pub fn build_entries(
         });
     }
 
-    let skills = SkillRegistry::discover(skills_dir);
+    let search_dirs = skill_search_dirs(workspace, skills_dir);
+    let skills = SkillRegistry::discover_many(search_dirs.iter().map(std::path::PathBuf::as_path));
     for skill in skills.list() {
         entries.push(CommandPaletteEntry {
             section: PaletteSection::Skill,

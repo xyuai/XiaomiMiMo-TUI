@@ -1695,9 +1695,12 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
     println!();
     println!("{}", "Skills:".bold());
     let global_skills_dir = config.skills_dir();
+    let xiaomimimo_skills_dir = workspace.join(".xiaomimimo").join("skills");
     let agents_skills_dir = workspace.join(".agents").join("skills");
     let local_skills_dir = workspace.join("skills");
-    let selected_skills_dir = if agents_skills_dir.exists() {
+    let selected_skills_dir = if xiaomimimo_skills_dir.exists() {
+        &xiaomimimo_skills_dir
+    } else if agents_skills_dir.exists() {
         &agents_skills_dir
     } else if local_skills_dir.exists() {
         &local_skills_dir
@@ -1710,6 +1713,21 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
             .map(|entries| entries.filter_map(std::result::Result::ok).count())
             .unwrap_or(0)
     };
+
+    if xiaomimimo_skills_dir.exists() {
+        println!(
+            "  {} workspace skills dir found at {} ({} items)",
+            "✓".truecolor(aqua_r, aqua_g, aqua_b),
+            xiaomimimo_skills_dir.display(),
+            describe_dir(&xiaomimimo_skills_dir)
+        );
+    } else {
+        println!(
+            "  {} workspace skills dir not found at {}",
+            "·".dimmed(),
+            xiaomimimo_skills_dir.display()
+        );
+    }
 
     if local_skills_dir.exists() {
         println!(
@@ -1761,7 +1779,11 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
         "·".dimmed(),
         selected_skills_dir.display()
     );
-    if !agents_skills_dir.exists() && !local_skills_dir.exists() && !global_skills_dir.exists() {
+    if !xiaomimimo_skills_dir.exists()
+        && !agents_skills_dir.exists()
+        && !local_skills_dir.exists()
+        && !global_skills_dir.exists()
+    {
         println!("    Run `xiaomimimo setup --skills` (or add --local for ./skills).");
     }
 
@@ -1899,9 +1921,12 @@ fn run_doctor_json(
     };
 
     let global_skills_dir = config.skills_dir();
+    let xiaomimimo_skills_dir = workspace.join(".xiaomimimo").join("skills");
     let agents_skills_dir = workspace.join(".agents").join("skills");
     let local_skills_dir = workspace.join("skills");
-    let selected_skills_dir = if agents_skills_dir.exists() {
+    let selected_skills_dir = if xiaomimimo_skills_dir.exists() {
+        xiaomimimo_skills_dir.clone()
+    } else if agents_skills_dir.exists() {
         agents_skills_dir.clone()
     } else if local_skills_dir.exists() {
         local_skills_dir.clone()
@@ -1935,6 +1960,11 @@ fn run_doctor_json(
                 "path": global_skills_dir.display().to_string(),
                 "present": global_skills_dir.exists(),
                 "count": skills_count_for(&global_skills_dir),
+            },
+            "workspace": {
+                "path": xiaomimimo_skills_dir.display().to_string(),
+                "present": xiaomimimo_skills_dir.exists(),
+                "count": skills_count_for(&xiaomimimo_skills_dir),
             },
             "agents": {
                 "path": agents_skills_dir.display().to_string(),
@@ -3656,7 +3686,10 @@ mod terminal_mode_tests {
     impl EnvGuard {
         fn new(keys: &[&'static str]) -> Self {
             Self {
-                keys: keys.iter().map(|key| (*key, std::env::var_os(key))).collect(),
+                keys: keys
+                    .iter()
+                    .map(|key| (*key, std::env::var_os(key)))
+                    .collect(),
             }
         }
     }

@@ -658,14 +658,16 @@ async fn list_skills(
     State(state): State<RuntimeApiState>,
 ) -> Result<Json<SkillsResponse>, ApiError> {
     let skills_dir = resolve_skills_dir(&state.config, &state.workspace);
-    let registry = SkillRegistry::discover(&skills_dir);
+    let search_dirs = crate::skills::skill_search_dirs(&state.workspace, &skills_dir);
+    let registry =
+        SkillRegistry::discover_many(search_dirs.iter().map(std::path::PathBuf::as_path));
     let skills = registry
         .list()
         .iter()
         .map(|skill| SkillEntry {
             name: skill.name.clone(),
             description: skill.description.clone(),
-            path: skills_dir.join(&skill.name).join("SKILL.md"),
+            path: skill.path.clone(),
         })
         .collect();
     Ok(Json(SkillsResponse {
@@ -1340,6 +1342,10 @@ fn run_git(workspace: &std::path::Path, args: &[&str]) -> Option<String> {
 }
 
 fn resolve_skills_dir(config: &Config, workspace: &std::path::Path) -> PathBuf {
+    let workspace_skills = workspace.join(".xiaomimimo").join("skills");
+    if workspace_skills.exists() {
+        return workspace_skills;
+    }
     let agents_skills = workspace.join(".agents").join("skills");
     if agents_skills.exists() {
         return agents_skills;
@@ -2641,7 +2647,8 @@ mod tests {
 
     #[tokio::test]
     async fn session_resume_thread_creates_thread_from_saved_session() -> Result<()> {
-        let root = std::env::temp_dir().join(format!("xiaomimimo-session-resume-{}", Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("xiaomimimo-session-resume-{}", Uuid::new_v4()));
         let sessions_dir = root.join("sessions");
         fs::create_dir_all(&sessions_dir)?;
         let session_id = "sess_test_resume";

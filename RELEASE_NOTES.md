@@ -1,3 +1,22 @@
+# XiaomiMiMo-TUI v0.6.9
+
+## Changes
+- Added workspace/global user slash commands from `.xiaomimimo/commands` and `~/.xiaomimimo/commands`; workspace commands take precedence and can override built-ins.
+- Slash completion now includes user commands alongside built-in commands.
+- `@` mention completion can include explicitly typed hidden/config paths such as `.xiaomimimo/...`, even when ignored.
+- Skills discovery now checks workspace and global locations with workspace precedence across TUI, palette, runtime API, and prompts.
+- Active skill instructions now use a bounded, stable context block for long skill files.
+
+## Verification
+- `cargo check -p xiaomimimo-tui`
+- `cargo test -p xiaomimimo-tui commands -- --nocapture`
+- `cargo test -p xiaomimimo-tui skills -- --nocapture`
+- `cargo test -p xiaomimimo-tui working_set -- --nocapture`
+- `cargo test -p xiaomimimo-tui prompts -- --nocapture`
+- `git diff --check`
+
+---
+
 # XiaomiMiMo-TUI v0.6.8
 
 ## Changes

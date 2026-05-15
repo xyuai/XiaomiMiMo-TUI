@@ -19,6 +19,7 @@ mod review;
 mod session;
 mod skills;
 mod task;
+mod user_commands;
 
 use crate::tui::app::{App, AppAction};
 
@@ -439,6 +440,10 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
     let command = command.strip_prefix('/').unwrap_or(&command);
     let arg = parts.get(1).map(|s| s.trim());
 
+    if let Some(result) = user_commands::try_dispatch_user_command(app, cmd.trim()) {
+        return result;
+    }
+
     // Match command or alias
     match command {
         // Core commands
@@ -610,6 +615,18 @@ pub fn commands_matching(prefix: &str) -> Vec<&'static CommandInfo> {
             cmd.name.starts_with(&prefix) || cmd.aliases.iter().any(|a| a.starts_with(&prefix))
         })
         .collect()
+}
+
+pub fn command_names_matching(app: &App, prefix: &str) -> Vec<String> {
+    let mut names = user_commands::user_commands_matching(app, prefix);
+    names.extend(
+        commands_matching(prefix)
+            .into_iter()
+            .map(|info| format!("/{}", info.name)),
+    );
+    names.sort();
+    names.dedup();
+    names
 }
 
 fn edit_distance(a: &str, b: &str) -> usize {
@@ -815,6 +832,27 @@ mod tests {
         assert!(COMMANDS.iter().any(|cmd| cmd.name == "links"));
         assert!(!COMMANDS.iter().any(|cmd| cmd.name == "set"));
         assert!(!COMMANDS.iter().any(|cmd| cmd.name == "xiaomimimo"));
+    }
+
+    #[test]
+    fn workspace_user_command_overrides_builtin_and_is_completed() {
+        let tmpdir = TempDir::new().expect("tempdir");
+        let commands_dir = tmpdir.path().join(".xiaomimimo").join("commands");
+        std::fs::create_dir_all(&commands_dir).unwrap();
+        std::fs::write(commands_dir.join("help.md"), "custom help for $ARGUMENTS").unwrap();
+        let mut app = create_test_app_in(&tmpdir);
+
+        let result = execute("/help current task", &mut app);
+        assert!(result.message.is_none());
+        assert_eq!(
+            result.action,
+            Some(AppAction::SendMessage(
+                "custom help for current task".to_string()
+            ))
+        );
+
+        let names = command_names_matching(&app, "he");
+        assert!(names.contains(&"/help".to_string()));
     }
 
     #[test]

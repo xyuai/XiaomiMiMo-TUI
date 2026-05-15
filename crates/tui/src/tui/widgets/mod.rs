@@ -1423,16 +1423,13 @@ fn composer_height(
     line_count.clamp(1, max_height).try_into().unwrap_or(1)
 }
 
-pub(crate) fn slash_completion_hints(input: &str, limit: usize) -> Vec<String> {
+pub(crate) fn slash_completion_hints(app: &App, input: &str, limit: usize) -> Vec<String> {
     if !input.starts_with('/') || input.contains(char::is_whitespace) {
         return Vec::new();
     }
 
     let prefix = input.trim_start_matches('/');
-    let mut hints = commands::commands_matching(prefix)
-        .into_iter()
-        .map(|info| format!("/{}", info.name))
-        .collect::<Vec<_>>();
+    let mut hints = commands::command_names_matching(app, prefix);
 
     if hints.is_empty() && prefix.eq_ignore_ascii_case("model") {
         hints = COMMON_XIAOMIMIMO_MODELS
@@ -1780,14 +1777,16 @@ mod tests {
 
     #[test]
     fn slash_completion_hints_include_links_and_config() {
-        let hints = slash_completion_hints("/", 128);
+        let app = create_test_app();
+        let hints = slash_completion_hints(&app, "/", 128);
         assert!(hints.iter().any(|hint| hint == "/config"));
         assert!(hints.iter().any(|hint| hint == "/links"));
     }
 
     #[test]
     fn slash_completion_hints_exclude_set_and_xiaomimimo_commands() {
-        let hints = slash_completion_hints("/", 128);
+        let app = create_test_app();
+        let hints = slash_completion_hints(&app, "/", 128);
         assert!(!hints.iter().any(|hint| hint == "/set"));
         assert!(!hints.iter().any(|hint| hint == "/xiaomimimo"));
     }

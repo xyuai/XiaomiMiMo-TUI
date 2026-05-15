@@ -19,7 +19,7 @@ pub fn visible_slash_menu_entries(app: &App, limit: usize) -> Vec<String> {
     if app.slash_menu_hidden {
         return Vec::new();
     }
-    slash_completion_hints(&app.input, limit)
+    slash_completion_hints(app, &app.input, limit)
 }
 
 /// Apply the currently-selected slash menu entry to the composer input.
@@ -59,12 +59,15 @@ pub fn try_autocomplete_slash_command(app: &mut App) -> bool {
     }
 
     let prefix = app.input.trim_start_matches('/');
-    let matches = commands::commands_matching(prefix);
+    let matches = commands::command_names_matching(app, prefix);
     if matches.is_empty() {
         return false;
     }
 
-    let names = matches.iter().map(|info| info.name).collect::<Vec<_>>();
+    let names = matches
+        .iter()
+        .map(|name| name.trim_start_matches('/'))
+        .collect::<Vec<_>>();
     let shared = crate::tui::file_mention::longest_common_prefix(&names);
 
     if !shared.is_empty() && shared.len() > prefix.len() {
@@ -76,7 +79,7 @@ pub fn try_autocomplete_slash_command(app: &mut App) -> bool {
     }
 
     if matches.len() == 1 {
-        let completed = format!("/{} ", matches[0].name);
+        let completed = format!("{} ", matches[0]);
         app.input = completed.clone();
         app.cursor_position = completed.chars().count();
         app.slash_menu_hidden = false;
@@ -87,7 +90,7 @@ pub fn try_autocomplete_slash_command(app: &mut App) -> bool {
     let preview = matches
         .iter()
         .take(5)
-        .map(|info| format!("/{}", info.name))
+        .map(String::as_str)
         .collect::<Vec<_>>()
         .join(", ");
     app.status_message = Some(format!("Suggestions: {preview}"));

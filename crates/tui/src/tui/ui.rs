@@ -9,10 +9,9 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use crossterm::{
     event::{
-        self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture,
-        EnableBracketedPaste, EnableFocusChange, EnableMouseCapture, Event,
-        KeyboardEnhancementFlags, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton,
-        MouseEvent, MouseEventKind,
+        self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+        EnableFocusChange, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+        KeyModifiers, KeyboardEnhancementFlags, MouseButton, MouseEvent, MouseEventKind,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -146,11 +145,8 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     let use_mouse_capture = options.use_mouse_capture;
     let use_bracketed_paste = options.use_bracketed_paste;
     enable_raw_mode()?;
-    let mut cleanup_guard = TerminalCleanupGuard::new(
-        use_alt_screen,
-        use_mouse_capture,
-        use_bracketed_paste,
-    );
+    let mut cleanup_guard =
+        TerminalCleanupGuard::new(use_alt_screen, use_mouse_capture, use_bracketed_paste);
     let mut stdout = io::stdout();
     if use_alt_screen {
         execute!(stdout, EnterAlternateScreen)?;
@@ -1494,10 +1490,14 @@ async fn run_event_loop(
                             ) {
                                 Ok(workspace) => {
                                     app.workspace = workspace.clone();
+                                    let xiaomimimo_skills_dir =
+                                        workspace.join(".xiaomimimo").join("skills");
                                     let agents_skills_dir =
                                         workspace.join(".agents").join("skills");
                                     let local_skills_dir = workspace.join("skills");
-                                    app.skills_dir = if agents_skills_dir.exists() {
+                                    app.skills_dir = if xiaomimimo_skills_dir.exists() {
+                                        xiaomimimo_skills_dir
+                                    } else if agents_skills_dir.exists() {
                                         agents_skills_dir
                                     } else if local_skills_dir.exists() {
                                         local_skills_dir
@@ -4917,7 +4917,11 @@ fn resume_terminal(
     if use_alt_screen {
         execute!(terminal.backend_mut(), EnterAlternateScreen)?;
     }
-    recover_terminal_modes(terminal.backend_mut(), use_mouse_capture, use_bracketed_paste);
+    recover_terminal_modes(
+        terminal.backend_mut(),
+        use_mouse_capture,
+        use_bracketed_paste,
+    );
     terminal.clear()?;
     Ok(())
 }

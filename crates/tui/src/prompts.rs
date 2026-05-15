@@ -173,7 +173,24 @@ pub fn system_prompt_for_mode_with_context(
     workspace: &Path,
     working_set_summary: Option<&str>,
 ) -> SystemPrompt {
-    system_prompt_for_mode_with_context_and_skills(mode, workspace, working_set_summary, None)
+    let workspace_skills = crate::skills::workspace_skills_dir(workspace);
+    let agents_skills = workspace.join(".agents").join("skills");
+    let local_skills = workspace.join("skills");
+    let skills_dir = if workspace_skills.exists() {
+        workspace_skills
+    } else if agents_skills.exists() {
+        agents_skills
+    } else if local_skills.exists() {
+        local_skills
+    } else {
+        crate::skills::default_skills_dir()
+    };
+    system_prompt_for_mode_with_context_and_skills(
+        mode,
+        workspace,
+        working_set_summary,
+        Some(&skills_dir),
+    )
 }
 
 /// Get the system prompt for a specific mode with project and skills context.
@@ -207,8 +224,9 @@ pub fn system_prompt_for_mode_with_context_and_skills(
         full_prompt = format!("{full_prompt}\n\n{summary}");
     }
 
-    if let Some(skills_block) = skills_dir.and_then(crate::skills::render_available_skills_context)
-    {
+    if let Some(skills_block) = skills_dir.and_then(|dir| {
+        crate::skills::render_available_skills_context_for_workspace(workspace, dir)
+    }) {
         full_prompt = format!("{full_prompt}\n\n{skills_block}");
     }
 
@@ -391,6 +409,29 @@ mod tests {
         ] {
             assert!(prompt.contains(expected), "missing {expected}");
         }
+    }
+
+    #[test]
+    fn system_prompt_lists_workspace_skills() {
+        let tmp = tempdir().expect("tempdir");
+        let skill_dir = tmp
+            .path()
+            .join(".xiaomimimo")
+            .join("skills")
+            .join("workspace-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: workspace-skill\ndescription: Workspace skill\n---\nbody",
+        )
+        .unwrap();
+
+        let prompt = match system_prompt_for_mode_with_context(AppMode::Agent, tmp.path(), None) {
+            SystemPrompt::Text(text) => text,
+            SystemPrompt::Blocks(_) => panic!("expected text system prompt"),
+        };
+
+        assert!(prompt.contains("- workspace-skill: Workspace skill"));
     }
 
     #[test]

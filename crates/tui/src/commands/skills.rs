@@ -1,13 +1,14 @@
 //! Skills commands: skills, skill
 
 use std::fmt::Write;
+use std::path::PathBuf;
 
 use crate::network_policy::NetworkPolicy;
-use crate::skills::SkillRegistry;
 use crate::skills::install::{
     self, DEFAULT_MAX_SIZE_BYTES, DEFAULT_REGISTRY_URL, InstallOutcome, InstallSource,
     RegistryFetchResult, UpdateResult,
 };
+use crate::skills::{SkillRegistry, render_active_skill_instruction, skill_search_dirs};
 use crate::tui::app::App;
 use crate::tui::history::HistoryCell;
 
@@ -26,6 +27,19 @@ fn render_skill_warnings(registry: &SkillRegistry) -> String {
     out
 }
 
+fn discover_app_skills(app: &App) -> (Vec<PathBuf>, SkillRegistry) {
+    let dirs = skill_search_dirs(&app.workspace, &app.skills_dir);
+    let registry = SkillRegistry::discover_many(dirs.iter().map(PathBuf::as_path));
+    (dirs, registry)
+}
+
+fn render_skill_locations(dirs: &[PathBuf]) -> String {
+    dirs.iter()
+        .map(|dir| format!("  {}", dir.display()))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// List all available skills. Pass `--remote` (or `remote`) to fetch the
 /// curated registry instead of scanning the local skills directory.
 pub fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
@@ -38,25 +52,24 @@ pub fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
             return CommandResult::error("用法：/skills [--remote]");
         }
     }
-    let skills_dir = app.skills_dir.clone();
-    let registry = SkillRegistry::discover(&skills_dir);
+    let (search_dirs, registry) = discover_app_skills(app);
     let warnings = render_skill_warnings(&registry);
 
     if registry.is_empty() {
         let msg = format!(
-            "未找到技能。\n\n\
-             技能位置：{}\n\n\
-             添加技能时，请创建包含 SKILL.md 的目录：\n  \
+            "No skills found.\n\n\
+             Skill search locations:\n{}\n\n\
+             Add a skill by creating a directory that contains SKILL.md:\n  \
              {}/my-skill/SKILL.md\n\n\
-             格式：\n  \
+             Format:\n  \
              ---\n  \
              name: my-skill\n  \
-             description: 这个技能的用途\n  \
+             description: What this skill is for\n  \
              allowed-tools: read_file, list_dir\n  \
              ---\n\n  \
-             <在这里写说明>{warnings}",
-            skills_dir.display(),
-            skills_dir.display()
+             <write instructions here>{warnings}",
+            render_skill_locations(&search_dirs),
+            search_dirs[0].display()
         );
         return CommandResult::message(msg);
     }
@@ -68,8 +81,8 @@ pub fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
     }
     let _ = write!(
         output,
-        "\n使用 /skill <name> 运行技能\n技能位置：{}{}",
-        skills_dir.display(),
+        "\nUse /skill <name> to run a skill\nSkill search locations:\n{}{}",
+        render_skill_locations(&search_dirs),
         warnings
     );
 
@@ -108,14 +121,10 @@ fn activate_skill(app: &mut App, name: &str) -> CommandResult {
     // `/skill new` is a friendly alias for `/skill skill-creator`.
     let name = if name == "new" { "skill-creator" } else { name };
 
-    let skills_dir = app.skills_dir.clone();
-    let registry = SkillRegistry::discover(&skills_dir);
+    let (_search_dirs, registry) = discover_app_skills(app);
 
     if let Some(skill) = registry.get(name) {
-        let instruction = format!(
-            "You are now using a skill. Follow these instructions:\n\n# Skill: {}\n\n{}\n\n---\n\nNow respond to the user's request following the above skill instructions.",
-            skill.name, skill.body
-        );
+        let instruction = render_active_skill_instruction(skill);
 
         app.add_message(HistoryCell::System {
             content: format!("已激活技能：{}\n\n{}", skill.name, skill.description),
@@ -390,6 +399,16 @@ mod tests {
         std::fs::write(skill_dir.join("SKILL.md"), skill_content).unwrap();
     }
 
+    fn create_workspace_skill_dir(tmpdir: &TempDir, skill_name: &str, skill_content: &str) {
+        let skill_dir = tmpdir
+            .path()
+            .join(".xiaomimimo")
+            .join("skills")
+            .join(skill_name);
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(skill_dir.join("SKILL.md"), skill_content).unwrap();
+    }
+
     #[test]
     fn test_list_skills_empty_directory() {
         let tmpdir = TempDir::new().unwrap();
@@ -397,8 +416,8 @@ mod tests {
         let result = list_skills(&mut app, None);
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("未找到技能"));
-        assert!(msg.contains("技能位置："));
+        assert!(msg.contains("No skills found."));
+        assert!(msg.contains("Skill search locations:"));
     }
 
     #[test]
@@ -471,5 +490,27 @@ mod tests {
         assert!(msg.contains("A test skill"));
         assert!(app.active_skill.is_some());
         assert!(!app.history.is_empty());
+    }
+
+    #[test]
+    fn test_workspace_skill_overrides_configured_skill() {
+        let tmpdir = TempDir::new().unwrap();
+        create_skill_dir(
+            &tmpdir,
+            "dupe",
+            "---\nname: dupe\ndescription: Configured skill\n---\nconfigured body",
+        );
+        create_workspace_skill_dir(
+            &tmpdir,
+            "dupe",
+            "---\nname: dupe\ndescription: Workspace skill\n---\nworkspace body",
+        );
+        let mut app = create_test_app_with_tmpdir(&tmpdir);
+
+        let result = run_skill(&mut app, Some("dupe"));
+        assert!(result.message.unwrap().contains("Workspace skill"));
+        assert!(app.active_skill.as_deref().is_some_and(
+            |body| body.contains("workspace body") && !body.contains("configured body")
+        ));
     }
 }

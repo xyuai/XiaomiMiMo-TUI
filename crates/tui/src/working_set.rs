@@ -134,6 +134,7 @@ impl Workspace {
             return Vec::new();
         }
         let needle = partial.to_lowercase();
+        let include_explicit_hidden = explicit_hidden_partial(partial);
         let mut prefix_hits: Vec<String> = Vec::new();
         let mut substring_hits: Vec<String> = Vec::new();
         let mut seen: HashSet<PathBuf> = HashSet::new();
@@ -151,6 +152,7 @@ impl Workspace {
                 cwd,
                 cwd,
                 &needle,
+                include_explicit_hidden,
                 limit,
                 &mut prefix_hits,
                 &mut substring_hits,
@@ -161,6 +163,7 @@ impl Workspace {
             &self.root,
             &self.root,
             &needle,
+            include_explicit_hidden,
             limit,
             &mut prefix_hits,
             &mut substring_hits,
@@ -185,6 +188,7 @@ fn walk_for_completions(
     walk_root: &Path,
     display_root: &Path,
     needle: &str,
+    include_explicit_hidden: bool,
     limit: usize,
     prefix_hits: &mut Vec<String>,
     substring_hits: &mut Vec<String>,
@@ -192,9 +196,12 @@ fn walk_for_completions(
 ) {
     let mut builder = WalkBuilder::new(walk_root);
     builder
-        .hidden(true)
+        .hidden(!include_explicit_hidden)
         .follow_links(false)
         .max_depth(Some(COMPLETIONS_WALK_DEPTH));
+    if include_explicit_hidden {
+        builder.git_ignore(false).ignore(false).git_exclude(false);
+    }
     let _ = builder.add_custom_ignore_filename(".xiaomimimoignore");
 
     for entry in builder.build().flatten() {
@@ -242,6 +249,13 @@ fn walk_for_completions(
             substring_hits.push(candidate);
         }
     }
+}
+
+fn explicit_hidden_partial(partial: &str) -> bool {
+    partial
+        .replace('\\', "/")
+        .split('/')
+        .any(|component| component.starts_with('.') && component.len() > 1)
 }
 
 impl Clone for Workspace {
@@ -1117,6 +1131,32 @@ mod tests {
         assert!(
             entries.iter().any(|e| e == "alphabeta.txt"),
             "expected cwd entry alphabeta.txt; got: {entries:?}",
+        );
+    }
+
+    #[test]
+    fn workspace_completions_include_explicit_hidden_ignored_paths() {
+        let tmp = TempDir::new().unwrap();
+        let hidden = tmp.path().join(".xiaomimimo").join("commands");
+        std::fs::create_dir_all(&hidden).unwrap();
+        std::fs::write(hidden.join("ship.md"), "ship").unwrap();
+        std::fs::write(tmp.path().join(".ignore"), ".xiaomimimo/\n").unwrap();
+
+        let ws = Workspace::with_cwd(tmp.path().to_path_buf(), None);
+        assert!(
+            ws.completions("", 32)
+                .iter()
+                .all(|entry| !entry.starts_with(".xiaomimimo")),
+            "hidden config path should stay hidden until typed explicitly"
+        );
+
+        let entries = ws.completions(".xiaomimimo/com", 32);
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry == ".xiaomimimo/commands/"
+                    || entry == ".xiaomimimo/commands/ship.md"),
+            "explicit hidden path should complete despite ignore rules: {entries:?}"
         );
     }
 
