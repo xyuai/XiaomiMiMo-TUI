@@ -1,3 +1,20 @@
+# XiaomiMiMo-TUI v0.6.6
+
+## 更新内容
+
+- 增强 MCP HTTP 兼容性：默认发送 JSON/SSE Accept，支持 Streamable HTTP、SSE fallback、会话 ID 持久化与 GET 预检。
+- MCP discovery 支持 `nextCursor` 分页，单个异常条目不再丢弃整批结果，并保持工具、资源、提示排序稳定。
+- stdio MCP 捕获 stderr 尾部，连接或读取失败时提供更清晰的诊断信息。
+- HTTP MCP 支持自定义 headers，并继承 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY` 代理环境配置。
+- MCP 配置支持按文件变更 lazy reload，减少修改配置后必须重启的问题。
+
+## 验证
+
+- `cargo check --workspace`
+- `cargo test -p xiaomimimo-tui mcp -- --nocapture`
+
+---
+
 # XiaomiMiMo-TUI v0.6.5
 
 ## 更新内容
