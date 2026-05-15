@@ -33,7 +33,9 @@ use crate::automation_manager::{AutomationManager, AutomationSchedulerConfig, sp
 use crate::client::XiaomiMiMoClient;
 use crate::commands;
 use crate::compaction::estimate_input_tokens_conservative;
-use crate::config::{ApiProvider, Config, DEFAULT_NVIDIA_NIM_BASE_URL};
+use crate::config::{
+    ApiProvider, Config, DEFAULT_NVIDIA_NIM_BASE_URL, ProviderConfig, ProvidersConfig,
+};
 use crate::core::coherence::CoherenceState;
 use crate::core::engine::{EngineConfig, EngineHandle, spawn_engine};
 use crate::core::events::Event as EngineEvent;
@@ -169,6 +171,7 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     // can rebuild the API client without restarting the process.
     let mut config = config.clone();
     let config = &mut config;
+    apply_saved_provider_model_settings(config);
     let mut app = App::new(options.clone(), config);
 
     // Load existing session if resuming.
@@ -499,6 +502,45 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         runtime_services: app.runtime_services.clone(),
         subagent_model_overrides: config.subagent_model_overrides(),
         speech_output_dir: config.speech_output_dir(),
+    }
+}
+
+fn provider_config_mut(config: &mut Config, provider: ApiProvider) -> &mut ProviderConfig {
+    let providers = config
+        .providers
+        .get_or_insert_with(ProvidersConfig::default);
+    match provider {
+        ApiProvider::XiaomiMiMo => &mut providers.xiaomimimo,
+        ApiProvider::NvidiaNim => &mut providers.nvidia_nim,
+        ApiProvider::Openrouter => &mut providers.openrouter,
+        ApiProvider::Novita => &mut providers.novita,
+        ApiProvider::Fireworks => &mut providers.fireworks,
+        ApiProvider::Sglang => &mut providers.sglang,
+    }
+}
+
+fn set_config_model_for_provider(config: &mut Config, provider: ApiProvider, model: String) {
+    if matches!(provider, ApiProvider::XiaomiMiMo) {
+        config.default_text_model = Some(model);
+    } else {
+        provider_config_mut(config, provider).model = Some(model);
+    }
+}
+
+fn apply_saved_provider_model_settings(config: &mut Config) {
+    let Ok(settings) = crate::settings::Settings::load() else {
+        return;
+    };
+    if let Some(provider) = settings
+        .default_provider
+        .as_deref()
+        .and_then(ApiProvider::parse)
+    {
+        config.provider = Some(provider.as_str().to_string());
+    }
+    let provider = config.api_provider();
+    if let Some(model) = settings.model_for_provider(provider.as_str()) {
+        set_config_model_for_provider(config, provider, model.to_string());
     }
 }
 
@@ -2895,7 +2937,10 @@ async fn apply_model_picker_choice(
     match crate::settings::Settings::load() {
         Ok(mut settings) => {
             if model_changed {
-                let _ = settings.set("default_model", &model);
+                settings.set_model_for_provider(app.api_provider.as_str(), &model);
+                if matches!(app.api_provider, ApiProvider::XiaomiMiMo) {
+                    let _ = settings.set("default_model", &model);
+                }
             }
             if effort_changed {
                 let _ = settings.set("reasoning_effort", effort.as_setting());
@@ -2954,6 +2999,7 @@ async fn switch_provider(
     let previous_provider_str = config.provider.clone();
     let previous_base_url = config.base_url.clone();
     let previous_default_text_model = config.default_text_model.clone();
+    let previous_providers = config.providers.clone();
 
     config.provider = Some(target.as_str().to_string());
     if matches!(target, ApiProvider::NvidiaNim)
@@ -2975,13 +3021,18 @@ async fn switch_provider(
         config.base_url = None;
     }
     if let Some(ref model) = model_override {
-        config.default_text_model = Some(model.clone());
+        set_config_model_for_provider(config, target, model.clone());
+    } else if let Ok(settings) = crate::settings::Settings::load()
+        && let Some(model) = settings.model_for_provider(target.as_str())
+    {
+        set_config_model_for_provider(config, target, model.to_string());
     }
 
     if let Err(err) = XiaomiMiMoClient::new(config) {
         config.provider = previous_provider_str;
         config.base_url = previous_base_url;
         config.default_text_model = previous_default_text_model;
+        config.providers = previous_providers;
         app.add_message(HistoryCell::System {
             content: format!(
                 "Failed to switch provider to {}: {err}\nProvider unchanged ({}).",
@@ -3019,16 +3070,38 @@ async fn switch_provider(
         })
         .await;
 
+    let mut persist_warning: Option<String> = None;
+    match crate::settings::Settings::load() {
+        Ok(mut settings) => {
+            settings.default_provider = Some(target.as_str().to_string());
+            settings.set_model_for_provider(target.as_str(), &new_model);
+            if matches!(target, ApiProvider::XiaomiMiMo) {
+                let _ = settings.set("default_model", &new_model);
+            }
+            if let Err(err) = settings.save() {
+                persist_warning = Some(format!("(not persisted: {err})"));
+            }
+        }
+        Err(err) => {
+            persist_warning = Some(format!("(not persisted: {err})"));
+        }
+    }
+    let warning_suffix = persist_warning
+        .as_ref()
+        .map(|warning| format!(" {warning}"))
+        .unwrap_or_default();
+
     app.add_message(HistoryCell::System {
         content: format!(
-            "Provider switched: {} → {}\nModel: {} → {}",
+            "Provider switched: {} -> {}\nModel: {} -> {}{}",
             previous_provider.as_str(),
             target.as_str(),
             previous_model,
-            new_model
+            new_model,
+            warning_suffix
         ),
     });
-    app.status_message = Some(format!("Provider: {}", target.as_str()));
+    app.status_message = Some(format!("Provider: {}{}", target.as_str(), warning_suffix));
 }
 
 fn open_text_pager(app: &mut App, title: String, content: String) {
@@ -4572,7 +4645,7 @@ async fn apply_provider_picker_api_key(
     provider: ApiProvider,
     api_key: String,
 ) {
-    use crate::config::{ProviderConfig, ProvidersConfig, save_api_key_for};
+    use crate::config::save_api_key_for;
 
     match save_api_key_for(provider, &api_key) {
         Ok(path) => {

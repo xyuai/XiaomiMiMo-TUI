@@ -33,11 +33,11 @@ pub fn provider(app: &mut App, args: Option<&str>) -> CommandResult {
 
     let model = match model_arg {
         None => None,
-        Some(raw) => match normalize_model_name(&expand_model_alias(raw)) {
-            Some(normalized) => Some(normalized),
+        Some(raw) => match normalize_provider_model(target, raw) {
+            Some(model) => Some(model),
             None => {
                 return CommandResult::error(format!(
-                    "无效模型 '{raw}'。可尝试：flash、pro、tts、voiceclone、mimo-v2.5-pro、mimo-v2.5-tts。"
+                    "invalid model '{raw}'. Try: flash, pro, tts, voiceclone, mimo-v2.5-pro, mimo-v2.5-tts."
                 ));
             }
         },
@@ -61,6 +61,21 @@ fn expand_model_alias(name: &str) -> String {
         "voicedesign" | "voice-design" => "mimo-v2.5-tts-voicedesign".to_string(),
         "voiceclone" | "voice-clone" => "mimo-v2.5-tts-voiceclone".to_string(),
         other => other.to_string(),
+    }
+}
+
+fn normalize_provider_model(provider: ApiProvider, raw: &str) -> Option<String> {
+    let expanded = expand_model_alias(raw);
+    if matches!(provider, ApiProvider::XiaomiMiMo) {
+        return normalize_model_name(&expanded);
+    }
+    let trimmed = expanded.trim();
+    if trimmed.is_empty() {
+        None
+    } else if let Some(normalized) = normalize_model_name(trimmed) {
+        Some(normalized)
+    } else {
+        Some(trimmed.to_string())
     }
 }
 
@@ -250,11 +265,15 @@ mod tests {
     }
 
     #[test]
-    fn invalid_model_returns_error() {
+    fn custom_provider_model_is_preserved() {
         let mut app = create_test_app();
         let result = provider(&mut app, Some("nim gpt-4"));
-        let msg = result.message.expect("expected error message");
-        assert!(msg.contains("无效模型"));
-        assert!(result.action.is_none());
+        match result.action {
+            Some(AppAction::SwitchProvider { provider, model }) => {
+                assert_eq!(provider, ApiProvider::NvidiaNim);
+                assert_eq!(model.as_deref(), Some("gpt-4"));
+            }
+            other => panic!("expected SwitchProvider action, got {other:?}"),
+        }
     }
 }

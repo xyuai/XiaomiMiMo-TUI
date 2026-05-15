@@ -1,3 +1,22 @@
+# XiaomiMiMo-TUI v0.6.8
+
+## Changes
+- Provider-aware request building: `thinking`, `reasoning_content`, and tool schema fields now follow active provider capability.
+- Generic OpenAI-compatible backends strip non-standard tool metadata by default and keep `strict` only when supported.
+- Fireworks now uses OpenAI-compatible `reasoning_effort` instead of top-level `thinking`.
+- `XIAOMIMIMO_BASE_URL` is applied to the active provider config so provider defaults no longer override it.
+- `/provider` and `/model` selections persist per provider; custom OpenAI-compatible model IDs are preserved verbatim.
+
+## Verification
+- `cargo check --workspace`
+- `cargo test -p xiaomimimo-tui client -- --nocapture`
+- `cargo test -p xiaomimimo-tui config -- --nocapture`
+- `cargo test -p xiaomimimo-tui settings -- --nocapture`
+- `cargo test -p xiaomimimo-tui provider -- --nocapture`
+- `git diff --check`
+
+---
+
 # XiaomiMiMo-TUI v0.6.7
 
 ## ????

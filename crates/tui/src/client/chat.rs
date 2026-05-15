@@ -30,6 +30,7 @@ fn stream_idle_timeout() -> Duration {
     Duration::from_secs(secs)
 }
 
+use crate::config::ApiProvider;
 use crate::llm_client::StreamEventBox;
 use crate::logging;
 use crate::models::{
@@ -49,7 +50,7 @@ impl XiaomiMiMoClient {
         &self,
         request: &MessageRequest,
     ) -> Result<MessageResponse> {
-        let messages = build_chat_messages_for_request(request);
+        let messages = build_chat_messages_for_request_and_provider(request, self.api_provider);
         let mut body = json!({
             "model": request.model,
             "messages": messages,
@@ -63,7 +64,12 @@ impl XiaomiMiMoClient {
             body["top_p"] = json!(top_p);
         }
         if let Some(tools) = request.tools.as_ref() {
-            body["tools"] = json!(tools.iter().map(tool_to_chat).collect::<Vec<_>>());
+            body["tools"] = json!(
+                tools
+                    .iter()
+                    .map(|tool| tool_to_chat_for_provider(tool, self.api_provider, &self.base_url))
+                    .collect::<Vec<_>>()
+            );
         }
         if let Some(choice) = request.tool_choice.as_ref()
             && let Some(mapped) = map_tool_choice_for_chat(choice)
@@ -72,6 +78,12 @@ impl XiaomiMiMoClient {
         }
         apply_reasoning_effort(
             &mut body,
+            request.reasoning_effort.as_deref(),
+            self.api_provider,
+        );
+        let _ = sanitize_thinking_mode_messages(
+            &mut body,
+            &request.model,
             request.reasoning_effort.as_deref(),
             self.api_provider,
         );
@@ -100,7 +112,7 @@ impl XiaomiMiMoClient {
         request: MessageRequest,
     ) -> Result<StreamEventBox> {
         // Try true SSE streaming via chat completions (widely supported)
-        let messages = build_chat_messages_for_request(&request);
+        let messages = build_chat_messages_for_request_and_provider(&request, self.api_provider);
         let mut body = json!({
             "model": request.model,
             "messages": messages,
@@ -118,7 +130,12 @@ impl XiaomiMiMoClient {
             body["top_p"] = json!(top_p);
         }
         if let Some(tools) = request.tools.as_ref() {
-            body["tools"] = json!(tools.iter().map(tool_to_chat).collect::<Vec<_>>());
+            body["tools"] = json!(
+                tools
+                    .iter()
+                    .map(|tool| tool_to_chat_for_provider(tool, self.api_provider, &self.base_url))
+                    .collect::<Vec<_>>()
+            );
         }
         if let Some(choice) = request.tool_choice.as_ref()
             && let Some(mapped) = map_tool_choice_for_chat(choice)
@@ -143,6 +160,7 @@ impl XiaomiMiMoClient {
             &mut body,
             &request.model,
             request.reasoning_effort.as_deref(),
+            self.api_provider,
         );
 
         let url = api_url(&self.base_url, "chat/completions");
@@ -361,12 +379,24 @@ pub(super) fn build_chat_messages(
     )
 }
 
+#[cfg(test)]
 pub(super) fn build_chat_messages_for_request(request: &MessageRequest) -> Vec<Value> {
+    build_chat_messages_for_request_and_provider(request, ApiProvider::XiaomiMiMo)
+}
+
+pub(super) fn build_chat_messages_for_request_and_provider(
+    request: &MessageRequest,
+    provider: ApiProvider,
+) -> Vec<Value> {
     build_chat_messages_with_reasoning(
         request.system.as_ref(),
         &request.messages,
         &request.model,
-        should_replay_reasoning_content(&request.model, request.reasoning_effort.as_deref()),
+        should_replay_reasoning_content_for_provider(
+            provider,
+            &request.model,
+            request.reasoning_effort.as_deref(),
+        ),
     )
 }
 
@@ -652,21 +682,42 @@ pub(super) fn tool_to_chat(tool: &Tool) -> Value {
             "parameters": tool.input_schema,
         }
     });
-    if let Some(allowed_callers) = &tool.allowed_callers {
-        value["allowed_callers"] = json!(allowed_callers);
-    }
-    if let Some(defer_loading) = tool.defer_loading {
-        value["defer_loading"] = json!(defer_loading);
-    }
-    if let Some(input_examples) = &tool.input_examples {
-        value["input_examples"] = json!(input_examples);
-    }
     if let Some(strict) = tool.strict
         && let Some(function) = value.get_mut("function")
     {
         function["strict"] = json!(strict);
     }
     value
+}
+
+pub(super) fn tool_to_chat_for_provider(
+    tool: &Tool,
+    provider: ApiProvider,
+    base_url: &str,
+) -> Value {
+    let mut value = tool_to_chat(tool);
+    if !provider_supports_strict_tools(provider, base_url)
+        && let Some(function) = value.get_mut("function").and_then(Value::as_object_mut)
+    {
+        function.remove("strict");
+    }
+    value
+}
+
+fn provider_supports_strict_tools(provider: ApiProvider, base_url: &str) -> bool {
+    match provider {
+        ApiProvider::XiaomiMiMo => xiaomimimo_base_url_supports_strict_tools(base_url),
+        ApiProvider::NvidiaNim
+        | ApiProvider::Openrouter
+        | ApiProvider::Novita
+        | ApiProvider::Fireworks
+        | ApiProvider::Sglang => false,
+    }
+}
+
+fn xiaomimimo_base_url_supports_strict_tools(base_url: &str) -> bool {
+    let lower = base_url.to_ascii_lowercase();
+    lower.contains("xiaomimimo.com") || lower.contains("localhost") || lower.contains("127.0.0.1")
 }
 
 fn map_tool_choice_for_chat(choice: &Value) -> Option<Value> {
@@ -705,8 +756,9 @@ pub(super) fn sanitize_thinking_mode_messages(
     body: &mut Value,
     model: &str,
     effort: Option<&str>,
+    provider: ApiProvider,
 ) -> Option<u32> {
-    if !should_replay_reasoning_content(model, effort) {
+    if !should_replay_reasoning_content_for_provider(provider, model, effort) {
         return None;
     }
     let messages = body.get_mut("messages").and_then(Value::as_array_mut)?;
@@ -856,6 +908,25 @@ fn should_replay_reasoning_content(model: &str, effort: Option<&str>) -> bool {
     }
 
     requires_reasoning_content(model)
+}
+
+fn should_replay_reasoning_content_for_provider(
+    provider: ApiProvider,
+    model: &str,
+    effort: Option<&str>,
+) -> bool {
+    provider_accepts_reasoning_content(provider) && should_replay_reasoning_content(model, effort)
+}
+
+fn provider_accepts_reasoning_content(provider: ApiProvider) -> bool {
+    matches!(
+        provider,
+        ApiProvider::XiaomiMiMo
+            | ApiProvider::Openrouter
+            | ApiProvider::Novita
+            | ApiProvider::Fireworks
+            | ApiProvider::Sglang
+    )
 }
 
 fn has_xiaomimimo_r_series_marker(model_lower: &str) -> bool {

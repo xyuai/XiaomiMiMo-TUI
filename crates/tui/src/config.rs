@@ -1130,9 +1130,15 @@ impl Config {
         if let Some(model) = self
             .provider_config()
             .and_then(|provider| provider.model.as_deref())
-            && let Some(normalized) = normalize_model_for_provider(provider, model)
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
         {
-            return normalized;
+            if let Some(normalized) = normalize_model_for_provider(provider, model) {
+                return normalized;
+            }
+            if !matches!(provider, ApiProvider::XiaomiMiMo) {
+                return model.to_string();
+            }
         }
         if let Some(model) = self.default_text_model.as_deref()
             && let Some(normalized) = normalize_model_name(model)
@@ -1616,14 +1622,45 @@ fn apply_env_overrides(config: &mut Config) {
         config.api_key = Some(value);
     }
     if let Ok(value) = std::env::var("XIAOMIMIMO_BASE_URL") {
-        if matches!(config.api_provider(), ApiProvider::NvidiaNim) {
-            config
-                .providers
-                .get_or_insert_with(ProvidersConfig::default)
-                .nvidia_nim
-                .base_url = Some(value);
-        } else {
-            config.base_url = Some(value);
+        match config.api_provider() {
+            ApiProvider::XiaomiMiMo => {
+                config.base_url = Some(value);
+            }
+            ApiProvider::NvidiaNim => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .nvidia_nim
+                    .base_url = Some(value);
+            }
+            ApiProvider::Openrouter => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .openrouter
+                    .base_url = Some(value);
+            }
+            ApiProvider::Novita => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .novita
+                    .base_url = Some(value);
+            }
+            ApiProvider::Fireworks => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .fireworks
+                    .base_url = Some(value);
+            }
+            ApiProvider::Sglang => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .sglang
+                    .base_url = Some(value);
+            }
         }
     }
     if matches!(config.api_provider(), ApiProvider::NvidiaNim)
@@ -1682,7 +1719,11 @@ fn apply_env_overrides(config: &mut Config) {
     if matches!(config.api_provider(), ApiProvider::Sglang)
         && let Ok(value) = std::env::var("SGLANG_MODEL")
     {
-        config.default_text_model = Some(value);
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .sglang
+            .model = Some(value);
     }
     if let Ok(value) = std::env::var("XIAOMIMIMO_MODEL")
         .or_else(|_| std::env::var("XIAOMIMIMO_DEFAULT_TEXT_MODEL"))
@@ -1692,7 +1733,11 @@ fn apply_env_overrides(config: &mut Config) {
     if matches!(config.api_provider(), ApiProvider::NvidiaNim)
         && let Ok(value) = std::env::var("NVIDIA_NIM_MODEL")
     {
-        config.default_text_model = Some(value);
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .nvidia_nim
+            .model = Some(value);
     }
     if let Ok(value) = std::env::var("XIAOMIMIMO_SKILLS_DIR") {
         config.skills_dir = Some(value);
@@ -1862,31 +1907,22 @@ fn normalize_model_config(config: &mut Config) {
         {
             providers.xiaomimimo.model = Some(normalized);
         }
-        if let Some(model) = providers.nvidia_nim.model.as_deref()
-            && let Some(normalized) = normalize_model_for_provider(ApiProvider::NvidiaNim, model)
-        {
-            providers.nvidia_nim.model = Some(normalized);
-        }
-        if let Some(model) = providers.openrouter.model.as_deref()
-            && let Some(normalized) = normalize_model_for_provider(ApiProvider::Openrouter, model)
-        {
-            providers.openrouter.model = Some(normalized);
-        }
-        if let Some(model) = providers.novita.model.as_deref()
-            && let Some(normalized) = normalize_model_for_provider(ApiProvider::Novita, model)
-        {
-            providers.novita.model = Some(normalized);
-        }
-        if let Some(model) = providers.fireworks.model.as_deref()
-            && let Some(normalized) = normalize_model_for_provider(ApiProvider::Fireworks, model)
-        {
-            providers.fireworks.model = Some(normalized);
-        }
-        if let Some(model) = providers.sglang.model.as_deref()
-            && let Some(normalized) = normalize_model_for_provider(ApiProvider::Sglang, model)
-        {
-            providers.sglang.model = Some(normalized);
-        }
+        normalize_provider_entry_model(ApiProvider::NvidiaNim, &mut providers.nvidia_nim.model);
+        normalize_provider_entry_model(ApiProvider::Openrouter, &mut providers.openrouter.model);
+        normalize_provider_entry_model(ApiProvider::Novita, &mut providers.novita.model);
+        normalize_provider_entry_model(ApiProvider::Fireworks, &mut providers.fireworks.model);
+        normalize_provider_entry_model(ApiProvider::Sglang, &mut providers.sglang.model);
+    }
+}
+
+fn normalize_provider_entry_model(provider: ApiProvider, model: &mut Option<String>) {
+    let Some(current) = model.as_deref().map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    if let Some(normalized) = normalize_model_for_provider(provider, current) {
+        *model = Some(normalized);
+    } else if !matches!(provider, ApiProvider::XiaomiMiMo) {
+        *model = Some(current.to_string());
     }
 }
 
@@ -2821,6 +2857,19 @@ mod tests {
     }
 
     #[test]
+    fn provider_specific_custom_model_is_preserved() {
+        let mut providers = ProvidersConfig::default();
+        providers.openrouter.model = Some("openai/gpt-4.1-mini".to_string());
+        let config = Config {
+            provider: Some("openrouter".to_string()),
+            providers: Some(providers),
+            ..Default::default()
+        };
+
+        assert_eq!(config.default_model(), "openai/gpt-4.1-mini");
+    }
+
+    #[test]
     fn default_context_seams_are_opt_in() {
         let config = Config::default();
         assert!(!config.context.enabled.unwrap_or(false));
@@ -3218,6 +3267,34 @@ mod tests {
         let config = Config::load(None, None)?;
         assert_eq!(config.api_provider(), ApiProvider::Openrouter);
         assert_eq!(config.xiaomimimo_base_url(), "https://or-mirror.example/v1");
+        Ok(())
+    }
+
+    #[test]
+    fn facade_base_url_env_scopes_to_active_openrouter_provider() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "xiaomimimo-tui-or-facade-base-url-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        // Safety: test-only environment mutation guarded by a global mutex.
+        unsafe {
+            env::set_var("XIAOMIMIMO_PROVIDER", "openrouter");
+            env::set_var("XIAOMIMIMO_BASE_URL", "https://facade-or.example/v1");
+        }
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::Openrouter);
+        assert_eq!(config.base_url.as_deref(), None);
+        assert_eq!(config.xiaomimimo_base_url(), "https://facade-or.example/v1");
         Ok(())
     }
 

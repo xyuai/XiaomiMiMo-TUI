@@ -917,40 +917,50 @@ pub(super) fn apply_reasoning_effort(
         return;
     };
     let normalized = effort.trim().to_ascii_lowercase();
-    let disabled = matches!(normalized.as_str(), "off" | "disabled" | "none" | "false");
-    let enabled = matches!(
-        normalized.as_str(),
-        "" | "low" | "minimal" | "medium" | "mid" | "high" | "xhigh" | "max" | "highest"
-    );
-
-    if disabled {
-        match provider {
+    match normalized.as_str() {
+        "off" | "disabled" | "none" | "false" => match provider {
             ApiProvider::XiaomiMiMo
             | ApiProvider::Openrouter
             | ApiProvider::Novita
-            | ApiProvider::Fireworks
             | ApiProvider::Sglang => {
                 body["thinking"] = json!({ "type": "disabled" });
             }
+            ApiProvider::Fireworks => {}
             ApiProvider::NvidiaNim => {
                 body["chat_template_kwargs"] = json!({ "thinking": false });
             }
-        }
-    } else if enabled {
-        match provider {
+        },
+        "" | "low" | "minimal" | "medium" | "mid" | "high" => match provider {
             // Xiaomi MiMo's Chat Completions docs expose `thinking.type`; they
             // do not document OpenAI-style `reasoning_effort`, so avoid sending it.
             ApiProvider::XiaomiMiMo
             | ApiProvider::Openrouter
             | ApiProvider::Novita
-            | ApiProvider::Fireworks
             | ApiProvider::Sglang => {
                 body["thinking"] = json!({ "type": "enabled" });
+            }
+            ApiProvider::Fireworks => {
+                body["reasoning_effort"] = json!("high");
             }
             ApiProvider::NvidiaNim => {
                 body["chat_template_kwargs"] = json!({ "thinking": true });
             }
-        }
+        },
+        "xhigh" | "max" | "highest" => match provider {
+            ApiProvider::XiaomiMiMo
+            | ApiProvider::Openrouter
+            | ApiProvider::Novita
+            | ApiProvider::Sglang => {
+                body["thinking"] = json!({ "type": "enabled" });
+            }
+            ApiProvider::Fireworks => {
+                body["reasoning_effort"] = json!("max");
+            }
+            ApiProvider::NvidiaNim => {
+                body["chat_template_kwargs"] = json!({ "thinking": true });
+            }
+        },
+        _ => {}
     }
 }
 
@@ -1024,8 +1034,10 @@ mod responses;
 mod tests {
     use super::*;
     use crate::client::chat::{
-        build_chat_messages, build_chat_messages_for_request, count_reasoning_replay_chars,
+        build_chat_messages, build_chat_messages_for_request,
+        build_chat_messages_for_request_and_provider, count_reasoning_replay_chars,
         parse_chat_message, parse_sse_chunk, sanitize_thinking_mode_messages, tool_to_chat,
+        tool_to_chat_for_provider,
     };
     use crate::models::{ContentBlock, ContentBlockStart, Delta, Message, StreamEvent, Tool};
     use serde_json::json;
@@ -1590,6 +1602,51 @@ mod tests {
     }
 
     #[test]
+    fn generic_provider_drops_reasoning_content_replay() {
+        let request = MessageRequest {
+            model: "mimo-v2.5-pro".to_string(),
+            messages: vec![Message {
+                role: "assistant".to_string(),
+                content: vec![
+                    ContentBlock::Thinking {
+                        thinking: "private plan".to_string(),
+                    },
+                    ContentBlock::Text {
+                        text: "final".to_string(),
+                        cache_control: None,
+                    },
+                ],
+            }],
+            max_tokens: 1024,
+            system: None,
+            tools: None,
+            tool_choice: None,
+            metadata: None,
+            thinking: None,
+            reasoning_effort: Some("max".to_string()),
+            stream: None,
+            temperature: None,
+            top_p: None,
+        };
+
+        let native =
+            build_chat_messages_for_request_and_provider(&request, ApiProvider::XiaomiMiMo);
+        assert!(
+            native
+                .iter()
+                .any(|message| message.get("reasoning_content").is_some())
+        );
+
+        let generic =
+            build_chat_messages_for_request_and_provider(&request, ApiProvider::NvidiaNim);
+        assert!(
+            generic
+                .iter()
+                .all(|message| message.get("reasoning_content").is_none())
+        );
+    }
+
+    #[test]
     fn reasoning_effort_uses_xiaomimimo_top_level_thinking_parameter() {
         let mut body = json!({});
         apply_reasoning_effort(&mut body, Some("max"), ApiProvider::XiaomiMiMo);
@@ -1647,6 +1704,23 @@ mod tests {
             body.pointer("/chat_template_kwargs/reasoning_effort")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn reasoning_effort_uses_openai_compatible_shape_for_fireworks() {
+        let mut body = json!({});
+        apply_reasoning_effort(&mut body, Some("max"), ApiProvider::Fireworks);
+
+        assert_eq!(
+            body.get("reasoning_effort").and_then(Value::as_str),
+            Some("max")
+        );
+        assert!(body.get("thinking").is_none());
+
+        let mut off_body = json!({});
+        apply_reasoning_effort(&mut off_body, Some("off"), ApiProvider::Fireworks);
+        assert!(off_body.get("thinking").is_none());
+        assert!(off_body.get("reasoning_effort").is_none());
     }
 
     #[test]
@@ -1731,6 +1805,60 @@ mod tests {
             Some(true)
         );
         assert!(encoded.get("strict").is_none());
+    }
+
+    #[test]
+    fn chat_tool_wire_shape_omits_internal_provider_metadata() {
+        let tool = Tool {
+            tool_type: Some("function".to_string()),
+            name: "emit_json".to_string(),
+            description: "Emit JSON".to_string(),
+            input_schema: json!({"type": "object", "properties": {}}),
+            allowed_callers: Some(vec!["agent".to_string()]),
+            defer_loading: Some(true),
+            input_examples: Some(vec![json!({"ok": true})]),
+            strict: Some(true),
+            cache_control: None,
+        };
+        let encoded = tool_to_chat(&tool);
+
+        assert!(encoded.get("allowed_callers").is_none());
+        assert!(encoded.get("defer_loading").is_none());
+        assert!(encoded.get("input_examples").is_none());
+        assert_eq!(
+            encoded
+                .get("function")
+                .and_then(|function| function.get("strict"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn strict_tool_flag_is_removed_for_generic_provider() {
+        let tool = Tool {
+            tool_type: Some("function".to_string()),
+            name: "emit_json".to_string(),
+            description: "Emit JSON".to_string(),
+            input_schema: json!({"type": "object", "properties": {}}),
+            allowed_callers: None,
+            defer_loading: None,
+            input_examples: None,
+            strict: Some(true),
+            cache_control: None,
+        };
+
+        let encoded = tool_to_chat_for_provider(
+            &tool,
+            ApiProvider::NvidiaNim,
+            "https://integrate.api.nvidia.com/v1",
+        );
+        assert!(
+            encoded
+                .get("function")
+                .and_then(|function| function.get("strict"))
+                .is_none()
+        );
     }
 
     #[test]
@@ -2194,9 +2322,13 @@ mod tests {
             ]
         });
 
-        let approx_tokens =
-            sanitize_thinking_mode_messages(&mut body, "mimo-v2.5-pro", Some("max"))
-                .expect("multi-turn thinking-mode conversation should report replay tokens");
+        let approx_tokens = sanitize_thinking_mode_messages(
+            &mut body,
+            "mimo-v2.5-pro",
+            Some("max"),
+            ApiProvider::XiaomiMiMo,
+        )
+        .expect("multi-turn thinking-mode conversation should report replay tokens");
         // ~4 chars/token; 46 bytes of reasoning -> 11 tokens.
         assert_eq!(approx_tokens, 11);
 
@@ -2229,7 +2361,12 @@ mod tests {
                 { "role": "user", "content": "hi" }
             ]
         });
-        let result = sanitize_thinking_mode_messages(&mut body, "unknown-model", None);
+        let result = sanitize_thinking_mode_messages(
+            &mut body,
+            "unknown-model",
+            None,
+            ApiProvider::XiaomiMiMo,
+        );
         assert!(result.is_none());
     }
 
@@ -2251,7 +2388,12 @@ mod tests {
             ]
         });
 
-        sanitize_thinking_mode_messages(&mut body, "mimo-v2.5-pro", Some("max"));
+        sanitize_thinking_mode_messages(
+            &mut body,
+            "mimo-v2.5-pro",
+            Some("max"),
+            ApiProvider::XiaomiMiMo,
+        );
 
         let chars = count_reasoning_replay_chars(&body);
         // "(reasoning omitted)" is 19 bytes.

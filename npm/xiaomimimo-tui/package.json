@@ -1,7 +1,7 @@
 {
   "name": "xiaomimimo-tui",
-  "version": "0.6.7",
-  "xiaomimimoBinaryVersion": "0.6.7",
+  "version": "0.6.8",
+  "xiaomimimoBinaryVersion": "0.6.8",
   "description": "Windows x64 npm wrapper for XiaomiMiMo-TUI chat and speech binaries.",
   "author": "xyuai",
   "license": "MIT",

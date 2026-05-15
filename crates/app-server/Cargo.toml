@@ -10,15 +10,15 @@ description = "Codex-style app-server transport for XiaomiMiMo workspace archite
 anyhow.workspace = true
 axum.workspace = true
 clap.workspace = true
-xiaomimimo-agent = { path = "../agent", version = "0.6.7" }
-xiaomimimo-config = { path = "../config", version = "0.6.7" }
-xiaomimimo-core = { path = "../core", version = "0.6.7" }
-xiaomimimo-execpolicy = { path = "../execpolicy", version = "0.6.7" }
-xiaomimimo-hooks = { path = "../hooks", version = "0.6.7" }
-xiaomimimo-mcp = { path = "../mcp", version = "0.6.7" }
-xiaomimimo-protocol = { path = "../protocol", version = "0.6.7" }
-xiaomimimo-state = { path = "../state", version = "0.6.7" }
-xiaomimimo-tools = { path = "../tools", version = "0.6.7" }
+xiaomimimo-agent = { path = "../agent", version = "0.6.8" }
+xiaomimimo-config = { path = "../config", version = "0.6.8" }
+xiaomimimo-core = { path = "../core", version = "0.6.8" }
+xiaomimimo-execpolicy = { path = "../execpolicy", version = "0.6.8" }
+xiaomimimo-hooks = { path = "../hooks", version = "0.6.8" }
+xiaomimimo-mcp = { path = "../mcp", version = "0.6.8" }
+xiaomimimo-protocol = { path = "../protocol", version = "0.6.8" }
+xiaomimimo-state = { path = "../state", version = "0.6.8" }
+xiaomimimo-tools = { path = "../tools", version = "0.6.8" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

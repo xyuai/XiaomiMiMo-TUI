@@ -383,16 +383,37 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
 
     match key.as_str() {
         "model" => {
-            let Some(model) = normalize_model_name(value) else {
-                return CommandResult::error(format!(
-                    "无效模型 '{value}'。请输入 XiaomiMiMo 模型 ID。常用模型：{}",
-                    COMMON_XIAOMIMIMO_MODELS.join(", ")
-                ));
+            let model = if matches!(
+                app.api_provider,
+                crate::config::ApiProvider::XiaomiMiMo
+            ) {
+                let Some(model) = normalize_model_name(value) else {
+                    return CommandResult::error(format!(
+                        "invalid model '{value}'. Expected XiaomiMiMo model ID. Common: {}",
+                        COMMON_XIAOMIMIMO_MODELS.join(", ")
+                    ));
+                };
+                model
+            } else {
+                let model = value.trim();
+                if model.is_empty() {
+                    return CommandResult::error("model cannot be empty");
+                }
+                model.to_string()
             };
             app.model = model.clone();
             app.update_model_compaction_budget();
             app.last_prompt_tokens = None;
             app.last_completion_tokens = None;
+            if persist
+                && let Ok(mut settings) = Settings::load()
+            {
+                settings.set_model_for_provider(app.api_provider.as_str(), &model);
+                if matches!(app.api_provider, crate::config::ApiProvider::XiaomiMiMo) {
+                    let _ = settings.set("default_model", &model);
+                }
+                let _ = settings.save();
+            }
             return CommandResult::with_message_and_action(
                 format!("model = {model}"),
                 AppAction::UpdateCompaction(app.compaction_config()),

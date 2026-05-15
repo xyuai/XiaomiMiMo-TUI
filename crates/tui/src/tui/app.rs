@@ -880,7 +880,12 @@ impl App {
         let max_input_history = settings.max_input_history;
         let use_paste_burst_detection = settings.paste_burst_detection;
         let ui_theme = palette::UI_THEME;
-        let model = settings.default_model.clone().unwrap_or(model);
+        let provider = config.api_provider();
+        let model = settings
+            .model_for_provider(provider.as_str())
+            .map(str::to_string)
+            .or_else(|| settings.default_model.clone())
+            .unwrap_or(model);
         let compact_threshold =
             compaction_threshold_for_model_and_effort(&model, config.reasoning_effort());
 
@@ -951,7 +956,7 @@ impl App {
             sticky_status: None,
             last_status_message_seen: None,
             model,
-            api_provider: config.api_provider(),
+            api_provider: provider,
             reasoning_effort: config
                 .reasoning_effort()
                 .map_or_else(ReasoningEffort::default, |s| {

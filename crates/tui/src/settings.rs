@@ -2,13 +2,14 @@
 //!
 //! Settings are stored at ~/.config/xiaomimimo/settings.toml
 
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::config::{expand_path, normalize_model_name};
+use crate::config::{ApiProvider, expand_path, normalize_model_name};
 use crate::localization::normalize_configured_locale;
 
 /// User settings with defaults
@@ -52,6 +53,10 @@ pub struct Settings {
     pub max_input_history: usize,
     /// Default model to use
     pub default_model: Option<String>,
+    /// Default provider to activate at startup
+    pub default_provider: Option<String>,
+    /// Provider-scoped model selections
+    pub provider_models: Option<HashMap<String, String>>,
 }
 
 impl Default for Settings {
@@ -74,6 +79,8 @@ impl Default for Settings {
             sidebar_focus: "auto".to_string(),
             max_input_history: 100,
             default_model: None,
+            default_provider: None,
+            provider_models: None,
         }
     }
 }
@@ -124,6 +131,24 @@ impl Settings {
             .default_model
             .as_deref()
             .and_then(normalize_model_name);
+        settings.default_provider = settings
+            .default_provider
+            .as_deref()
+            .and_then(ApiProvider::parse)
+            .map(|provider| provider.as_str().to_string());
+        if let Some(provider_models) = settings.provider_models.as_mut() {
+            provider_models.retain(|provider, model| {
+                ApiProvider::parse(provider).is_some() && !model.trim().is_empty()
+            });
+            let normalized = provider_models
+                .drain()
+                .filter_map(|(provider, model)| {
+                    let parsed = ApiProvider::parse(&provider)?;
+                    Some((parsed.as_str().to_string(), model.trim().to_string()))
+                })
+                .collect::<HashMap<_, _>>();
+            settings.provider_models = (!normalized.is_empty()).then_some(normalized);
+        }
         settings.apply_env_overrides();
         Ok(settings)
     }
@@ -280,11 +305,41 @@ impl Settings {
                 };
                 self.default_model = Some(model);
             }
+            "default_provider" | "provider" => {
+                let Some(provider) = ApiProvider::parse(value) else {
+                    anyhow::bail!(
+                        "Failed to update setting: invalid provider '{value}'. Expected: xiaomimimo, nvidia-nim, openrouter, novita, fireworks, or sglang."
+                    );
+                };
+                self.default_provider = Some(provider.as_str().to_string());
+            }
             _ => {
                 anyhow::bail!("Failed to update setting: unknown setting '{key}'.");
             }
         }
         Ok(())
+    }
+
+    #[must_use]
+    pub fn model_for_provider(&self, provider: impl AsRef<str>) -> Option<&str> {
+        let provider = ApiProvider::parse(provider.as_ref())?;
+        self.provider_models
+            .as_ref()?
+            .get(provider.as_str())
+            .map(String::as_str)
+    }
+
+    pub fn set_model_for_provider(&mut self, provider: impl AsRef<str>, model: impl AsRef<str>) {
+        let Some(provider) = ApiProvider::parse(provider.as_ref()) else {
+            return;
+        };
+        let model = model.as_ref().trim();
+        if model.is_empty() {
+            return;
+        }
+        self.provider_models
+            .get_or_insert_with(HashMap::new)
+            .insert(provider.as_str().to_string(), model.to_string());
     }
 
     /// Get all settings as a displayable string
@@ -316,8 +371,17 @@ impl Settings {
         lines.push(format!("  max_history:        {}", self.max_input_history));
         lines.push(format!(
             "  default_model:      {}",
-            self.default_model.as_deref().unwrap_or("（默认）")
+            self.default_model.as_deref().unwrap_or("(default)")
         ));
+        lines.push(format!(
+            "  default_provider:   {}",
+            self.default_provider.as_deref().unwrap_or("(default)")
+        ));
+        if let Some(provider_models) = &self.provider_models {
+            for (provider, model) in provider_models {
+                lines.push(format!("  provider_model.{provider}: {model}"));
+            }
+        }
         lines.push(String::new());
         lines.push(format!(
             "配置文件：{}",
@@ -364,9 +428,10 @@ impl Settings {
                 "侧边栏焦点：auto、plan、todos、tasks、agents",
             ),
             ("max_history", "最大输入历史条目数"),
+            ("default_model", "default XiaomiMiMo model ID"),
             (
-                "default_model",
-                "默认模型：任意 XiaomiMiMo 模型 ID（例如 mimo-v2.5-pro）",
+                "default_provider",
+                "default provider: xiaomimimo, nvidia-nim, openrouter, novita, fireworks, sglang",
             ),
         ]
     }
@@ -502,6 +567,19 @@ mod tests {
     fn default_settings_preserve_v4_prefix_cache_by_default() {
         let settings = Settings::default();
         assert!(!settings.auto_compact);
+    }
+
+    #[test]
+    fn provider_model_selection_is_stored_verbatim() {
+        let mut settings = Settings::default();
+        settings.set("default_provider", "openrouter").unwrap();
+        settings.set_model_for_provider("open_router", "openai/gpt-4.1-mini");
+
+        assert_eq!(settings.default_provider.as_deref(), Some("openrouter"));
+        assert_eq!(
+            settings.model_for_provider("openrouter"),
+            Some("openai/gpt-4.1-mini")
+        );
     }
 
     #[test]
