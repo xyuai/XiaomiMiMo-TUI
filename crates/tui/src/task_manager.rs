@@ -293,7 +293,7 @@ impl NewTaskRequest {
             mode: None,
             allow_shell: None,
             trust_mode: None,
-            auto_approve: Some(true),
+            auto_approve: None,
         }
     }
 }
@@ -827,7 +827,9 @@ impl TaskManager {
             mode: req.mode.unwrap_or_else(|| self.cfg.default_mode.clone()),
             allow_shell: req.allow_shell.unwrap_or(self.cfg.allow_shell),
             trust_mode: req.trust_mode.unwrap_or(self.cfg.trust_mode),
-            auto_approve: req.auto_approve.unwrap_or(true),
+            // Auto-approval must be opted into explicitly; omitted fields
+            // should not silently elevate a durable task's privileges.
+            auto_approve: req.auto_approve.unwrap_or(false),
             status: TaskStatus::Queued,
             created_at: Utc::now(),
             started_at: None,
@@ -1831,6 +1833,33 @@ mod tests {
         let _ = manager.cancel_task(&task.id).await?;
         let finished = wait_for_terminal_state(&manager, &task.id, Duration::from_secs(3)).await?;
         assert_eq!(finished.status, TaskStatus::Canceled);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn add_task_without_optional_fields_does_not_grant_shell_or_auto_approve() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("xiaomimimo-task-test-{}", Uuid::new_v4()));
+        let manager =
+            TaskManager::start_with_executor(test_config(root), Arc::new(MockExecutor)).await?;
+
+        let task = manager
+            .add_task(NewTaskRequest {
+                prompt: "least privilege task".to_string(),
+                model: None,
+                workspace: None,
+                mode: None,
+                allow_shell: None,
+                trust_mode: None,
+                auto_approve: None,
+            })
+            .await?;
+
+        assert!(!task.allow_shell);
+        assert!(!task.trust_mode);
+        assert!(
+            !task.auto_approve,
+            "omitted auto_approve must default to false"
+        );
         Ok(())
     }
 

@@ -98,6 +98,14 @@ pub struct NetworkPolicy {
     /// Hosts that should always be denied.
     #[serde(default)]
     pub deny: Vec<String>,
+    /// Hosts whose DNS may legitimately resolve to proxy fake-IP ranges.
+    ///
+    /// Some corporate/VPN proxy stacks synthesize addresses in restricted
+    /// ranges such as 198.18.0.0/15. These entries are never used for literal
+    /// IP URLs; they only relax DNS-result checks after the hostname itself
+    /// has passed the normal network policy.
+    #[serde(default)]
+    pub proxy: Vec<String>,
     /// Whether to record one audit-log line per network call. Defaults to true.
     #[serde(default = "default_audit")]
     pub audit: bool,
@@ -117,6 +125,7 @@ impl Default for NetworkPolicy {
             default: DecisionToml::Prompt,
             allow: Vec::new(),
             deny: Vec::new(),
+            proxy: Vec::new(),
             audit: true,
         }
     }
@@ -205,6 +214,18 @@ impl NetworkPolicy {
     pub fn audit_enabled(&self) -> bool {
         self.audit
     }
+
+    /// Whether `host` is configured to trust restricted DNS answers produced
+    /// by an explicit proxy/VPN fake-IP resolver.
+    #[must_use]
+    pub fn trusts_proxy_fakeip_host(&self, host: &str) -> bool {
+        let normalized = normalize_host(host);
+        !normalized.is_empty()
+            && self
+                .proxy
+                .iter()
+                .any(|entry| host_matches(entry, &normalized))
+    }
 }
 
 /// Normalize a host for matching: lowercase, trim whitespace, strip a single
@@ -255,7 +276,10 @@ impl NetworkAuditor {
     #[must_use]
     pub fn default_path(enabled: bool) -> Option<Self> {
         let home = dirs::home_dir()?;
-        Some(Self::new(home.join(".xiaomimimo").join("audit.log"), enabled))
+        Some(Self::new(
+            home.join(".xiaomimimo").join("audit.log"),
+            enabled,
+        ))
     }
 
     /// Append one line. Best-effort: errors are logged via `eprintln!` but
@@ -471,6 +495,19 @@ impl NetworkPolicyDecider {
         &self.policy
     }
 
+    /// Whether DNS for `host` is allowed to return restricted proxy fake-IP
+    /// addresses. Literal restricted IP URLs remain blocked by callers.
+    #[must_use]
+    pub fn trusts_proxy_fakeip_host(&self, host: &str) -> bool {
+        self.policy.trusts_proxy_fakeip_host(host)
+    }
+
+    /// Audit a restricted DNS answer that was allowed due to explicit proxy
+    /// opt-in.
+    pub fn record_trusted_proxy_fakeip_allow(&self, host: &str, tool: &str) {
+        self.audit_record(host, tool, "TrustedProxyFakeIp-Allow");
+    }
+
     fn audit_record(&self, host: &str, tool: &str, label: &str) {
         if let Some(auditor) = self.auditor.as_ref() {
             auditor.record(host, tool, label);
@@ -496,6 +533,7 @@ mod tests {
             default: default.into(),
             allow: allow.iter().map(|s| (*s).to_string()).collect(),
             deny: deny.iter().map(|s| (*s).to_string()).collect(),
+            proxy: Vec::new(),
             audit: false,
         }
     }

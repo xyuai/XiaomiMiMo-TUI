@@ -10,7 +10,7 @@
 use super::spec::{
     ApprovalRequirement, ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec, optional_u64,
 };
-use crate::network_policy::{Decision, host_from_url};
+use crate::network_policy::Decision;
 use async_trait::async_trait;
 use regex::Regex;
 use serde::Serialize;
@@ -143,91 +143,55 @@ impl ToolSpec for FetchUrlTool {
             ));
         }
 
-        // Extract host once for both network policy and SSRF checks.
-        let url_host = host_from_url(&url);
-
-        // Per-domain network policy gate (#135). If no policy is attached
-        // (e.g. ad-hoc tests), behavior is permissive.
-        if let Some(decider) = context.network_policy.as_ref()
-            && let Some(host) = url_host.as_ref()
-        {
-            match decider.evaluate(host, "fetch_url") {
-                Decision::Allow => {}
-                Decision::Deny => {
-                    return Err(ToolError::permission_denied(format!(
-                        "network call to '{host}' blocked by network policy"
-                    )));
-                }
-                Decision::Prompt => {
-                    return Err(ToolError::permission_denied(format!(
-                        "network call to '{host}' requires approval; \
-                         re-run after `/network allow {host}` or set network.default = \"allow\" in config"
-                    )));
-                }
-            }
-        }
-
-        // SSRF protection: reject local/internal IPs and pin the validated DNS
-        // result into reqwest to close the DNS-rebinding TOCTOU window.
-        let mut dns_pinning: Option<(String, IpAddr)> = None;
-        if let Some(host) = url_host.as_ref() {
-            let host_lc = host.to_ascii_lowercase();
-            if matches!(host_lc.as_str(), "localhost" | "localhost.localdomain") {
-                return Err(ToolError::permission_denied(
-                    "requests to localhost are not allowed",
-                ));
-            }
-
-            if let Ok(ip) = host.parse::<IpAddr>() {
-                if is_restricted_ip(&ip) {
-                    return Err(ToolError::permission_denied(format!(
-                        "IP {ip} is a restricted address (private/loopback/link-local)"
-                    )));
-                }
-            } else if let Ok(addrs) = tokio::net::lookup_host((&**host, 0u16)).await {
-                let mut first_valid = None;
-                for addr in addrs {
-                    let ip = addr.ip();
-                    if is_restricted_ip(&ip) {
-                        return Err(ToolError::permission_denied(format!(
-                            "resolved IP {ip} is a restricted address (private/loopback/link-local)"
-                        )));
-                    }
-                    first_valid.get_or_insert(ip);
-                }
-                if let Some(ip) = first_valid {
-                    dns_pinning = Some((host.clone(), ip));
-                }
-            }
-            // If DNS resolution fails, let the HTTP request fail naturally so
-            // the caller still gets the provider/network error text.
-        }
-
         let format = Format::parse(input.get("format").and_then(Value::as_str))?;
         let max_bytes = optional_u64(&input, "max_bytes", DEFAULT_MAX_BYTES).min(HARD_MAX_BYTES);
         let timeout_ms =
             optional_u64(&input, "timeout_ms", DEFAULT_TIMEOUT_MS).min(HARD_MAX_TIMEOUT_MS);
+        let mut current_url = reqwest::Url::parse(&url)
+            .map_err(|e| ToolError::invalid_input(format!("invalid URL: {e}")))?;
+        let mut redirects_followed = 0usize;
 
-        let mut client_builder = reqwest::Client::builder()
-            .timeout(Duration::from_millis(timeout_ms))
-            .user_agent(USER_AGENT)
-            .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS));
+        let resp = loop {
+            let dns_pinning = validate_fetch_target(&current_url, context).await?;
+            let mut client_builder = reqwest::Client::builder()
+                .timeout(Duration::from_millis(timeout_ms))
+                .user_agent(USER_AGENT)
+                .redirect(reqwest::redirect::Policy::none());
 
-        if let Some((hostname, validated_ip)) = dns_pinning {
-            client_builder = client_builder.resolve(&hostname, SocketAddr::new(validated_ip, 0));
-        }
+            if let Some((hostname, validated_ip)) = dns_pinning {
+                client_builder =
+                    client_builder.resolve(&hostname, SocketAddr::new(validated_ip, 0));
+            }
 
-        let client = client_builder.build().map_err(|e| {
-            ToolError::execution_failed(format!("failed to build HTTP client: {e}"))
-        })?;
+            let client = client_builder.build().map_err(|e| {
+                ToolError::execution_failed(format!("failed to build HTTP client: {e}"))
+            })?;
 
-        let resp = client
-            .get(&url)
-            .header("Accept", "text/html,text/plain,application/json,*/*;q=0.5")
-            .header("Accept-Language", "en-US,en;q=0.5")
-            .send()
-            .await
-            .map_err(|e| ToolError::execution_failed(format!("request failed: {e}")))?;
+            let resp = client
+                .get(current_url.clone())
+                .header("Accept", "text/html,text/plain,application/json,*/*;q=0.5")
+                .header("Accept-Language", "en-US,en;q=0.5")
+                .send()
+                .await
+                .map_err(|e| ToolError::execution_failed(format!("request failed: {e}")))?;
+
+            if !resp.status().is_redirection() || redirects_followed >= MAX_REDIRECTS {
+                break resp;
+            }
+
+            let Some(location) = resp
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+            else {
+                break resp;
+            };
+
+            current_url = resp.url().join(location).map_err(|e| {
+                ToolError::execution_failed(format!("invalid redirect location: {e}"))
+            })?;
+            redirects_followed += 1;
+        };
 
         let final_url = resp.url().to_string();
         let status = resp.status();
@@ -321,6 +285,95 @@ fn is_restricted_ip(ip: &IpAddr) -> bool {
                 || matches!(v6.segments(), [0xfe80..=0xfebf, ..])
         }
     }
+}
+
+async fn validate_fetch_target(
+    url: &reqwest::Url,
+    context: &ToolContext,
+) -> Result<Option<(String, IpAddr)>, ToolError> {
+    if url.scheme() != "http" && url.scheme() != "https" {
+        return Err(ToolError::invalid_input(
+            "only http:// and https:// URLs are supported",
+        ));
+    }
+
+    let host = url
+        .host_str()
+        .map(str::to_ascii_lowercase)
+        .ok_or_else(|| ToolError::invalid_input("URL must include a host"))?;
+
+    validate_network_policy(&host, context)?;
+
+    if matches!(host.as_str(), "localhost" | "localhost.localdomain") {
+        return Err(ToolError::permission_denied(
+            "requests to localhost are not allowed",
+        ));
+    }
+
+    // Handle both normal host strings and bracketed IPv6 literals through the
+    // same restricted-IP classifier.
+    let ip_candidate = host
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .unwrap_or(host.as_str());
+    if let Ok(ip) = ip_candidate.parse::<IpAddr>() {
+        if is_restricted_ip(&ip) {
+            return Err(ToolError::permission_denied(format!(
+                "IP {ip} is a restricted address (private/loopback/link-local)"
+            )));
+        }
+        return Ok(None);
+    }
+
+    let mut first_valid = None;
+    if let Ok(addrs) = tokio::net::lookup_host((host.as_str(), 0u16)).await {
+        for addr in addrs {
+            let ip = addr.ip();
+            validate_dns_resolved_ip(&host, &ip, context.network_policy.as_ref())?;
+            first_valid.get_or_insert(ip);
+        }
+    }
+
+    // If DNS resolution fails, let the HTTP request fail naturally so callers
+    // still get the provider/network error text.
+    Ok(first_valid.map(|ip| (host, ip)))
+}
+
+fn validate_network_policy(host: &str, context: &ToolContext) -> Result<(), ToolError> {
+    let Some(decider) = context.network_policy.as_ref() else {
+        return Ok(());
+    };
+    match decider.evaluate(host, "fetch_url") {
+        Decision::Allow => Ok(()),
+        Decision::Deny => Err(ToolError::permission_denied(format!(
+            "network call to '{host}' blocked by network policy"
+        ))),
+        Decision::Prompt => Err(ToolError::permission_denied(format!(
+            "network call to '{host}' requires approval; \
+             re-run after `/network allow {host}` or set network.default = \"allow\" in config"
+        ))),
+    }
+}
+
+fn validate_dns_resolved_ip(
+    host: &str,
+    ip: &IpAddr,
+    decider: Option<&crate::network_policy::NetworkPolicyDecider>,
+) -> Result<(), ToolError> {
+    if !is_restricted_ip(ip) {
+        return Ok(());
+    }
+
+    if let Some(decider) = decider
+        && decider.trusts_proxy_fakeip_host(host)
+    {
+        decider.record_trusted_proxy_fakeip_allow(host, "fetch_url");
+        return Ok(());
+    }
+
+    Err(ToolError::permission_denied(format!(
+        "resolved IP {ip} is a restricted address (private/loopback/link-local)"
+    )))
 }
 
 /// Strip `<script>` / `<style>` blocks, drop remaining tags, and collapse
@@ -421,6 +474,7 @@ mod tests {
             default: Decision::Deny.into(),
             allow: vec!["token-plan-cn.xiaomimimo.com".to_string()],
             deny: vec![],
+            proxy: vec![],
             audit: false,
         };
         let decider = NetworkPolicyDecider::new(policy, None);
@@ -469,5 +523,44 @@ mod tests {
             .await;
         let err = res.expect_err("localhost should fail before request");
         assert!(format!("{err}").contains("localhost"));
+    }
+
+    #[tokio::test]
+    async fn redirected_private_ip_literal_is_rejected_by_target_validator() {
+        let url = reqwest::Url::parse("http://169.254.169.254/latest/meta-data").unwrap();
+        let err = validate_fetch_target(&url, &ctx())
+            .await
+            .expect_err("metadata IP must be rejected");
+        assert!(format!("{err}").contains("restricted address"));
+    }
+
+    #[tokio::test]
+    async fn rejects_bracketed_ipv6_literal_loopback() {
+        let url = reqwest::Url::parse("http://[::1]/").unwrap();
+        let err = validate_fetch_target(&url, &ctx())
+            .await
+            .expect_err("[::1] must be rejected");
+        assert!(format!("{err}").contains("restricted address"));
+    }
+
+    #[test]
+    fn proxy_opt_in_allows_restricted_dns_for_matching_host_only() {
+        use crate::network_policy::{Decision, NetworkPolicy, NetworkPolicyDecider};
+
+        let policy = NetworkPolicy {
+            default: Decision::Allow.into(),
+            allow: vec![],
+            deny: vec![],
+            proxy: vec!["github.com".to_string()],
+            audit: false,
+        };
+        let decider = NetworkPolicyDecider::new(policy, None);
+        let ip = "198.18.0.1".parse().unwrap();
+
+        validate_dns_resolved_ip("github.com", &ip, Some(&decider))
+            .expect("matching proxy fake-IP host should be allowed");
+        let err = validate_dns_resolved_ip("example.com", &ip, Some(&decider))
+            .expect_err("unlisted host should stay blocked");
+        assert!(format!("{err}").contains("restricted address"));
     }
 }

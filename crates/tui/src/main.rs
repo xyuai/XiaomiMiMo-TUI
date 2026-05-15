@@ -15,6 +15,7 @@ use wait_timeout::ChildExt;
 
 mod audit;
 mod automation_manager;
+mod child_env;
 mod client;
 mod command_safety;
 mod commands;

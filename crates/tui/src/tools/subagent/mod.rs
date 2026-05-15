@@ -590,18 +590,17 @@ impl SubAgentRuntime {
     }
 
     /// Build a child runtime cloning this one, incrementing `spawn_depth`,
-    /// deriving a child cancellation token, and forcing `auto_approve` on
+    /// deriving a child cancellation token, and preserving approval mode on
     /// the child's `ToolContext`. Used at spawn entry to construct the
     /// runtime the new sub-agent will see.
     ///
-    /// The `auto_approve` override is deliberate: spawning IS the approval.
-    /// Per-tool prompts inside a child would break delegation, so children
-    /// inherit a YOLO-equivalent context regardless of the parent's mode.
-    /// The workspace boundary + sandbox profile still apply.
+    /// Spawning delegates work, but it must not silently elevate approval
+    /// privileges. Children inherit the parent's workspace, sandbox profile,
+    /// and approval boundary.
     #[must_use]
     pub fn child_runtime(&self) -> Self {
         let mut child_context = self.context.clone();
-        child_context.auto_approve = true;
+        child_context.auto_approve = self.context.auto_approve;
         Self {
             client: self.client.clone(),
             model: self.model.clone(),
@@ -4033,6 +4032,7 @@ struct SubAgentToolRegistry {
     /// `None` → full inheritance (no filter applied). `Some(list)` →
     /// only the listed tools are visible to the model and callable.
     allowed_tools: Option<Vec<String>>,
+    auto_approve: bool,
     registry: ToolRegistry,
 }
 
@@ -4048,6 +4048,7 @@ impl SubAgentToolRegistry {
         // review, RLM, sub-agent management (so grandchildren can spawn),
         // plus per-child fresh todo/plan state.
         let context = runtime.context.clone();
+        let auto_approve = context.auto_approve;
         let registry = ToolRegistryBuilder::new()
             .with_full_agent_surface(
                 Some(runtime.client.clone()),
@@ -4063,6 +4064,7 @@ impl SubAgentToolRegistry {
 
         Self {
             allowed_tools: explicit_allowed_tools,
+            auto_approve,
             registry,
         }
     }
@@ -4101,6 +4103,20 @@ impl SubAgentToolRegistry {
     async fn execute(&self, agent_id: &str, name: &str, mut input: Value) -> Result<String> {
         if !self.is_tool_allowed(name) {
             return Err(anyhow!("Tool {name} not allowed for this sub-agent"));
+        }
+        let spec = self
+            .registry
+            .get(name)
+            .ok_or_else(|| anyhow!("Tool {name} not available for this sub-agent"))?;
+        if !self.auto_approve && spec.approval_requirement() != ApprovalRequirement::Auto {
+            return Err(anyhow!(
+                "Tool {name} requires approval and cannot run inside a sub-agent unless the parent session is in auto-approve mode"
+            ));
+        }
+        if name == "exec_shell" && input.get("interactive").and_then(Value::as_bool) == Some(true) {
+            return Err(anyhow!(
+                "Tool exec_shell with interactive=true is not allowed inside sub-agents"
+            ));
         }
         if name == "report_agent_job_result"
             && let Some(object) = input.as_object_mut()

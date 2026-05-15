@@ -74,6 +74,7 @@ max_subagents = 5
 # default = "prompt" # allow | deny | prompt
 # allow = ["token-plan-cn.xiaomimimo.com", "github.com", ".githubusercontent.com"]
 # deny = []
+# proxy = [] # hosts allowed to resolve to proxy fake-IP ranges
 # audit = true
 
 [tui]

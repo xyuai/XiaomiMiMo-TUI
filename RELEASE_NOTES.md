@@ -1,3 +1,23 @@
+# XiaomiMiMo-TUI v0.6.5
+
+## 更新内容
+
+- 强化 `fetch_url` 重定向安全：每一跳目标都会在请求前重新校验 scheme、host、IP 与网络策略。
+- 持久任务默认审批边界更严格：省略审批字段不再自动授予 shell 或自动审批权限。
+- 子代理保留父会话审批边界，并阻止交互式终端接管。
+- shell 与 MCP 子进程启动时使用环境变量白名单，减少父进程敏感变量泄漏。
+
+## 验证
+
+- `rustfmt --edition 2024 --check`（v0.6.5 变更文件）
+- `cargo check --workspace`
+- `cargo test -p xiaomimimo-tui fetch_url -- --nocapture`
+- `cargo test -p xiaomimimo-tui task_manager -- --nocapture`
+- `cargo test -p xiaomimimo-tui subagent -- --nocapture`
+- `cargo test -p xiaomimimo-tui child_env -- --nocapture`
+
+---
+
 # XiaomiMiMo-TUI v0.6.4
 
 ## 更新内容

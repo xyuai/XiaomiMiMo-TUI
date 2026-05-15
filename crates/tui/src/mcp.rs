@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin, ChildStdout};
 
+use crate::child_env;
 use crate::network_policy::{Decision, NetworkPolicyDecider, host_from_url};
 
 // === Error diagnostics helpers (#71) ===
@@ -539,9 +540,7 @@ impl McpConnection {
                 .stderr(std::process::Stdio::null())
                 .kill_on_drop(true);
 
-            for (key, value) in &config.env {
-                cmd.env(key, value);
-            }
+            child_env::apply_to_tokio_command_mcp(&mut cmd, child_env::string_map_env(&config.env));
 
             let mut child = cmd.spawn().with_context(|| {
                 let env_keys: Vec<&str> = config.env.keys().map(String::as_str).collect();
@@ -1882,9 +1881,7 @@ pub fn call_tool(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    for (key, value) in &server_cfg.env {
-        cmd.env(key, value);
-    }
+    child_env::apply_to_command(&mut cmd, child_env::string_map_env(&server_cfg.env));
 
     let mut child = cmd.spawn().with_context(|| "Failed to spawn MCP server")?;
     let mut stdin = child.stdin.take().context("Failed to open MCP stdin")?;

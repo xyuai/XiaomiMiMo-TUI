@@ -448,6 +448,60 @@ fn test_subagent_tool_registry_reports_unavailable_tools() {
 }
 
 #[tokio::test]
+async fn subagent_registry_blocks_approval_required_tools_without_auto_approve() {
+    let tmp = tempdir().expect("tempdir");
+    let mut runtime = stub_runtime();
+    runtime.context = ToolContext::new(tmp.path().to_path_buf());
+    runtime.context.auto_approve = false;
+    runtime.allow_shell = true;
+    let registry = SubAgentToolRegistry::new(
+        runtime,
+        Some(vec!["exec_shell".to_string()]),
+        Arc::new(Mutex::new(TodoList::new())),
+        Arc::new(Mutex::new(PlanState::default())),
+    );
+
+    let err = registry
+        .execute("agent_test", "exec_shell", json!({"command": "echo hi"}))
+        .await
+        .expect_err("approval-required tools should be blocked");
+
+    assert!(
+        err.to_string().contains("requires approval"),
+        "unexpected error: {err}"
+    );
+}
+
+#[tokio::test]
+async fn subagent_registry_blocks_interactive_shell_even_with_auto_approve() {
+    let tmp = tempdir().expect("tempdir");
+    let mut runtime = stub_runtime();
+    runtime.context = ToolContext::new(tmp.path().to_path_buf());
+    runtime.context.auto_approve = true;
+    runtime.allow_shell = true;
+    let registry = SubAgentToolRegistry::new(
+        runtime,
+        Some(vec!["exec_shell".to_string()]),
+        Arc::new(Mutex::new(TodoList::new())),
+        Arc::new(Mutex::new(PlanState::default())),
+    );
+
+    let err = registry
+        .execute(
+            "agent_test",
+            "exec_shell",
+            json!({"command": "echo hi", "interactive": true}),
+        )
+        .await
+        .expect_err("interactive shell should be blocked");
+
+    assert!(
+        err.to_string().contains("interactive=true"),
+        "unexpected error: {err}"
+    );
+}
+
+#[tokio::test]
 async fn test_wait_for_result_reports_timeout_when_still_running() {
     let manager = Arc::new(Mutex::new(SubAgentManager::new(PathBuf::from("."), 2)));
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
@@ -894,18 +948,25 @@ fn would_exceed_depth_at_boundary() {
 }
 
 #[test]
-fn child_runtime_increments_depth_and_forces_auto_approve() {
+fn child_runtime_increments_depth_and_preserves_auto_approve() {
     let mut parent = stub_runtime();
     parent.spawn_depth = 1;
     parent.context.auto_approve = false; // parent in suggest mode
     let child = parent.child_runtime();
     assert_eq!(child.spawn_depth, 2, "child depth = parent + 1");
     assert!(
-        child.context.auto_approve,
-        "child must auto-approve regardless of parent mode (spawning IS the approval)"
+        !child.context.auto_approve,
+        "child must preserve the parent's approval boundary"
     );
-    // Parent mode is unchanged — the override is on the child only.
+    // Parent mode is unchanged.
     assert!(!parent.context.auto_approve);
+
+    parent.context.auto_approve = true;
+    let child = parent.child_runtime();
+    assert!(
+        child.context.auto_approve,
+        "child keeps auto-approve only when the parent already has it"
+    );
 }
 
 #[test]

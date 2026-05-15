@@ -201,6 +201,10 @@ pub struct NetworkPolicyToml {
     /// Hosts that are always denied. Deny entries win over allow entries.
     #[serde(default)]
     pub deny: Vec<String>,
+    /// Hosts whose DNS may legitimately resolve to proxy fake-IP ranges.
+    /// Literal restricted IP URLs remain blocked.
+    #[serde(default)]
+    pub proxy: Vec<String>,
     /// Whether to record one audit-log line per outbound network call.
     #[serde(default = "default_network_audit")]
     pub audit: bool,
@@ -220,6 +224,7 @@ impl Default for NetworkPolicyToml {
             default: default_network_decision(),
             allow: Vec::new(),
             deny: Vec::new(),
+            proxy: Vec::new(),
             audit: default_network_audit(),
         }
     }
