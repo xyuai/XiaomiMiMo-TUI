@@ -458,6 +458,8 @@ pub struct App {
     pub use_mouse_capture: bool,
     pub use_bracketed_paste: bool,
     pub use_paste_burst_detection: bool,
+    /// Bare Up/Down in an empty composer scrolls the transcript when enabled.
+    pub(crate) composer_arrows_scroll: bool,
     #[allow(dead_code)]
     pub system_prompt: Option<SystemPrompt>,
     pub input_history: Vec<String>,
@@ -749,6 +751,18 @@ pub enum SubmitDisposition {
     QueueFollowUp,
 }
 
+fn default_composer_arrows_scroll(use_mouse_capture: bool) -> bool {
+    default_composer_arrows_scroll_for_platform(use_mouse_capture, cfg!(windows))
+}
+
+fn default_composer_arrows_scroll_for_platform(use_mouse_capture: bool, is_windows: bool) -> bool {
+    // Mouse capture is not always available on Windows/legacy consoles. In
+    // that case keeping the transcript reachable from the keyboard is a safer
+    // default. Non-Windows terminals with mouse capture keep the historic
+    // prompt-history behavior unless explicitly configured otherwise.
+    is_windows || !use_mouse_capture
+}
+
 /// Detailed tool payload attached to a history cell.
 #[derive(Debug, Clone)]
 pub struct ToolDetailRecord {
@@ -855,6 +869,11 @@ impl App {
         let ui_locale = resolve_locale(&settings.locale);
         let composer_density = ComposerDensity::from_setting(&settings.composer_density);
         let composer_border = settings.composer_border;
+        let composer_arrows_scroll = config
+            .tui
+            .as_ref()
+            .and_then(|tui| tui.composer_arrows_scroll)
+            .unwrap_or_else(|| default_composer_arrows_scroll(use_mouse_capture));
         let transcript_spacing = TranscriptSpacing::from_setting(&settings.transcript_spacing);
         let sidebar_width_percent = settings.sidebar_width_percent;
         let sidebar_focus = SidebarFocus::from_setting(&settings.sidebar_focus);
@@ -945,6 +964,7 @@ impl App {
             use_mouse_capture,
             use_bracketed_paste,
             use_paste_burst_detection,
+            composer_arrows_scroll,
             system_prompt: None,
             input_history: Vec::new(),
             draft_history: VecDeque::new(),
@@ -2930,6 +2950,13 @@ mod tests {
         let app = App::new(test_options(false), &Config::default());
         assert!(app.history.is_empty());
         assert_eq!(app.history_version, 0);
+    }
+
+    #[test]
+    fn composer_arrow_scroll_default_tracks_platform_and_mouse_capture() {
+        assert!(default_composer_arrows_scroll_for_platform(false, false));
+        assert!(!default_composer_arrows_scroll_for_platform(true, false));
+        assert!(default_composer_arrows_scroll_for_platform(true, true));
     }
 
     #[test]

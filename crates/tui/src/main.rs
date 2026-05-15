@@ -86,6 +86,37 @@ fn configure_windows_console_utf8() {
 #[cfg(not(windows))]
 fn configure_windows_console_utf8() {}
 
+fn spawn_signal_cleanup_task() {
+    tokio::spawn(async {
+        wait_for_terminating_signal().await;
+        crate::tui::ui::emergency_restore_terminal();
+        std::process::exit(130);
+    });
+}
+
+#[cfg(unix)]
+async fn wait_for_terminating_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let ctrl_c = tokio::signal::ctrl_c();
+    let mut sigterm = signal(SignalKind::terminate()).ok();
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = async {
+            if let Some(sigterm) = sigterm.as_mut() {
+                sigterm.recv().await;
+            } else {
+                std::future::pending::<()>().await;
+            }
+        } => {}
+    }
+}
+
+#[cfg(not(unix))]
+async fn wait_for_terminating_signal() {
+    let _ = tokio::signal::ctrl_c().await;
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "xiaomimimo",
@@ -576,16 +607,7 @@ async fn main() -> Result<()> {
     // paste, mouse capture, and Kitty keyboard enhancement flags.
     let orig_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
-        use crossterm::event::{
-            DisableBracketedPaste, DisableMouseCapture, PopKeyboardEnhancementFlags,
-        };
-        use crossterm::terminal::{LeaveAlternateScreen, disable_raw_mode};
-
-        let _ = crossterm::execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
-        let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste);
-        let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
-        let _ = disable_raw_mode();
-        let _ = crossterm::execute!(std::io::stdout(), LeaveAlternateScreen);
+        crate::tui::ui::emergency_restore_terminal();
 
         let msg = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
             s.to_string()
@@ -613,6 +635,7 @@ async fn main() -> Result<()> {
 
         orig_hook(panic_info);
     }));
+    spawn_signal_cleanup_task();
 
     dotenv().ok();
     let cli = Cli::parse();
@@ -1481,6 +1504,12 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
         );
     }
     println!("  workspace: {}", workspace.display());
+    if crate::settings::detected_legacy_windows_console_host() {
+        println!(
+            "  {} legacy Windows console detected; low-motion rendering will be used",
+            "!".truecolor(sky_r, sky_g, sky_b)
+        );
+    }
 
     // Check API keys
     println!();
@@ -3204,7 +3233,7 @@ fn should_use_mouse_capture(cli: &Cli, config: &Config, use_alt_screen: bool) ->
 }
 
 fn default_mouse_capture_enabled() -> bool {
-    !cfg!(windows)
+    !cfg!(windows) || crate::settings::detected_modern_windows_terminal()
 }
 
 fn is_zellij() -> bool {
@@ -3612,6 +3641,37 @@ async fn run_exec_agent(
 mod terminal_mode_tests {
     use super::*;
     use clap::Parser;
+    #[cfg(windows)]
+    use std::{ffi::OsString, sync::Mutex};
+
+    #[cfg(windows)]
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[cfg(windows)]
+    struct EnvGuard {
+        keys: Vec<(&'static str, Option<OsString>)>,
+    }
+
+    #[cfg(windows)]
+    impl EnvGuard {
+        fn new(keys: &[&'static str]) -> Self {
+            Self {
+                keys: keys.iter().map(|key| (*key, std::env::var_os(key))).collect(),
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (key, value) in &self.keys {
+                match value {
+                    Some(value) => unsafe { std::env::set_var(key, value) },
+                    None => unsafe { std::env::remove_var(key) },
+                }
+            }
+        }
+    }
 
     fn parse_cli(args: &[&str]) -> Cli {
         Cli::try_parse_from(args).expect("CLI args should parse")
@@ -3628,11 +3688,25 @@ mod terminal_mode_tests {
 
     #[test]
     #[cfg(windows)]
-    fn mouse_capture_defaults_off_on_windows_when_alternate_screen_is_active() {
+    fn mouse_capture_defaults_off_on_unmarked_windows_console_when_alternate_screen_is_active() {
         let cli = parse_cli(&["xiaomimimo"]);
         let config = Config::default();
 
         assert!(!should_use_mouse_capture(&cli, &config, true));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn mouse_capture_defaults_on_for_windows_terminal_marker() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = EnvGuard::new(&["WT_SESSION"]);
+        unsafe {
+            std::env::set_var("WT_SESSION", "test-session");
+        }
+        let cli = parse_cli(&["xiaomimimo"]);
+        let config = Config::default();
+
+        assert!(should_use_mouse_capture(&cli, &config, true));
     }
 
     #[test]
@@ -3650,6 +3724,7 @@ mod terminal_mode_tests {
             tui: Some(crate::config::TuiConfig {
                 alternate_screen: None,
                 mouse_capture: Some(false),
+                composer_arrows_scroll: None,
                 status_items: None,
             }),
             ..Config::default()
@@ -3681,6 +3756,7 @@ mod terminal_mode_tests {
             tui: Some(crate::config::TuiConfig {
                 alternate_screen: None,
                 mouse_capture: Some(true),
+                composer_arrows_scroll: None,
                 status_items: None,
             }),
             ..Config::default()

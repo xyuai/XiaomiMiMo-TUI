@@ -16,8 +16,7 @@ use std::process::Command;
 
 use crossterm::{
     event::{
-        DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        PopKeyboardEnhancementFlags,
+        DisableBracketedPaste, DisableFocusChange, DisableMouseCapture,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -130,7 +129,8 @@ pub fn spawn_editor_for_input(
     // 1. Suspend.
     // Best effort: do not let a child editor inherit Kitty keyboard protocol
     // enhancement flags pushed by the TUI.
-    let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
+    super::ui::pop_keyboard_enhancement_flags(terminal.backend_mut());
+    let _ = execute!(terminal.backend_mut(), DisableFocusChange);
     let _ = disable_raw_mode();
     if use_bracketed_paste {
         let _ = execute!(terminal.backend_mut(), DisableBracketedPaste);
@@ -149,13 +149,12 @@ pub fn spawn_editor_for_input(
     if use_alt_screen {
         let _ = execute!(terminal.backend_mut(), EnterAlternateScreen);
     }
-    if use_mouse_capture {
-        let _ = execute!(terminal.backend_mut(), EnableMouseCapture);
-    }
-    if use_bracketed_paste {
-        let _ = execute!(terminal.backend_mut(), EnableBracketedPaste);
-    }
     let _ = enable_raw_mode();
+    super::ui::recover_terminal_modes(
+        terminal.backend_mut(),
+        use_mouse_capture,
+        use_bracketed_paste,
+    );
     // Force a full repaint so a SIGWINCH during the edit doesn't leave the
     // viewport stale.
     let _ = terminal.clear();

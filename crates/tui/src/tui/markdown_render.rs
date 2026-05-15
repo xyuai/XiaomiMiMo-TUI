@@ -391,6 +391,22 @@ fn render_line_with_links(
             current_spans = Vec::new();
             current_width = 0;
         }
+        if ww > width {
+            if !current_spans.is_empty() {
+                lines.push(Line::from(current_spans));
+                current_spans = Vec::new();
+                current_width = 0;
+            }
+            let mut chunks = hard_wrap_segment(&word, width);
+            if let Some(tail) = chunks.pop() {
+                for chunk in chunks {
+                    lines.push(Line::from(Span::styled(chunk, style)));
+                }
+                current_width = tail.width();
+                current_spans.push(Span::styled(tail, style));
+            }
+            continue;
+        }
         current_spans.push(Span::styled(word, style));
         current_width += ww;
     }
@@ -517,39 +533,40 @@ fn render_table_row(cells: &[String], width: usize, base_style: Style) -> Vec<Li
     let col_width = (width.saturating_sub(3 * cells.len() + 1)) / cells.len();
     let col_width = col_width.max(4);
     let sep_style = Style::default().fg(palette::TEXT_DIM);
-    let mut spans: Vec<Span> = vec![Span::styled("│ ".to_string(), sep_style)];
-    for (i, cell) in cells.iter().enumerate() {
-        let truncated = if cell.width() > col_width {
-            let mut s = String::new();
-            let mut w = 0;
-            for ch in cell.chars() {
-                let cw = ch.width().unwrap_or(1);
-                if w + cw + 1 > col_width {
-                    s.push('…');
-                    break;
-                }
-                s.push(ch);
-                w += cw;
+    let wrapped_cells: Vec<Vec<String>> = cells
+        .iter()
+        .map(|cell| wrap_text(cell, col_width))
+        .collect();
+    let row_count = wrapped_cells
+        .iter()
+        .map(Vec::len)
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let mut rows = Vec::new();
+
+    for row in 0..row_count {
+        let mut spans: Vec<Span> = vec![Span::styled("\u{2502} ".to_string(), sep_style)];
+        for (i, cell_rows) in wrapped_cells.iter().enumerate() {
+            let cell = cell_rows.get(row).map(String::as_str).unwrap_or("");
+            let cell_spans: Vec<(String, Style)> =
+                parse_inline_spans(cell, base_style, link_style());
+            let cell_width: usize = cell_spans.iter().map(|(t, _)| t.width()).sum();
+            let pad = col_width.saturating_sub(cell_width);
+            for (text, style) in cell_spans {
+                spans.push(Span::styled(text, style));
             }
-            s
-        } else {
-            cell.clone()
-        };
-        let cell_spans: Vec<(String, Style)> =
-            parse_inline_spans(&truncated, base_style, link_style());
-        let cell_width: usize = cell_spans.iter().map(|(t, _)| t.width()).sum();
-        let pad = col_width.saturating_sub(cell_width);
-        for (text, style) in cell_spans {
-            spans.push(Span::styled(text, style));
+            spans.push(Span::raw(" ".repeat(pad)));
+            if i + 1 < cells.len() {
+                spans.push(Span::styled(" \u{2502} ".to_string(), sep_style));
+            } else {
+                spans.push(Span::styled(" \u{2502}".to_string(), sep_style));
+            }
         }
-        spans.push(Span::raw(" ".repeat(pad)));
-        if i + 1 < cells.len() {
-            spans.push(Span::styled(" │ ".to_string(), sep_style));
-        } else {
-            spans.push(Span::styled(" │".to_string(), sep_style));
-        }
+        rows.push(Line::from(spans));
     }
-    vec![Line::from(spans)]
+
+    rows
 }
 
 fn link_style() -> Style {
@@ -568,6 +585,14 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
 
     for word in text.split_whitespace() {
         let word_width = word.width();
+        if word_width > width {
+            if !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+                current_width = 0;
+            }
+            lines.extend(hard_wrap_segment(word, width));
+            continue;
+        }
         let additional = if current.is_empty() {
             word_width
         } else {
@@ -593,6 +618,26 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
         lines.push(current);
     }
 
+    lines
+}
+
+fn hard_wrap_segment(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut current_width = 0usize;
+    for ch in text.chars() {
+        let char_width = ch.width().unwrap_or(1);
+        if current_width + char_width > width && !current.is_empty() {
+            lines.push(std::mem::take(&mut current));
+            current_width = 0;
+        }
+        current.push(ch);
+        current_width += char_width;
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
     lines
 }
 
@@ -756,6 +801,27 @@ mod tests {
             "table separator missing: {text:?}"
         );
         assert!(!text.contains("|---|"), "separator row leaked: {text:?}");
+    }
+
+    #[test]
+    fn paragraph_hard_wraps_overlong_cjk_runs() {
+        let source = "这是一个非常长的中文字符串".repeat(4);
+        let lines = render_markdown(&source, 12, Style::default());
+        let text_lines = collect_text(&lines);
+        assert!(text_lines.len() > 1);
+        assert!(text_lines.iter().all(|line| line.width() <= 12));
+        assert_eq!(text_lines.join(""), source);
+    }
+
+    #[test]
+    fn table_long_cells_wrap_without_ellipsis() {
+        let long_cell = "这是一个非常长的中文表格单元格".repeat(3);
+        let src = format!("| item | detail |\n|---|---|\n| a | {long_cell} |\n");
+        let lines = render_markdown(&src, 36, Style::default());
+        let text = collect_text(&lines).join("\n");
+        assert!(!text.contains('…'));
+        assert!(text.contains("中文表格"));
+        assert!(lines.len() > 2, "long cell should wrap: {text:?}");
     }
 
     #[test]

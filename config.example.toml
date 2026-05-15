@@ -80,6 +80,9 @@ max_subagents = 5
 [tui]
 alternate_screen = "auto" # auto | always | never
 mouse_capture = true
+# Empty-composer Up/Down scroll transcript instead of prompt history.
+# Defaults to true on Windows or when mouse capture is disabled.
+composer_arrows_scroll = false
 
 [features]
 shell_tool = true

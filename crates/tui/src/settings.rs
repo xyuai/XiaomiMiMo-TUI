@@ -2,6 +2,7 @@
 //!
 //! Settings are stored at ~/.config/xiaomimimo/settings.toml
 
+use std::ffi::OsStr;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -102,14 +103,14 @@ impl Settings {
     /// Load settings from disk, or return defaults if not found
     pub fn load() -> Result<Self> {
         let path = Self::path()?;
-        if !path.exists() {
-            return Ok(Self::default());
-        }
-
-        let content = std::fs::read_to_string(&path)
-            .with_context(|| format!("Failed to read settings from {}", path.display()))?;
-        let mut settings: Settings = toml::from_str(&content)
-            .with_context(|| format!("Failed to parse settings from {}", path.display()))?;
+        let mut settings = if path.exists() {
+            let content = std::fs::read_to_string(&path)
+                .with_context(|| format!("Failed to read settings from {}", path.display()))?;
+            toml::from_str(&content)
+                .with_context(|| format!("Failed to parse settings from {}", path.display()))?
+        } else {
+            Self::default()
+        };
         settings.default_mode = normalize_mode(&settings.default_mode).to_string();
         settings.composer_density =
             normalize_composer_density(&settings.composer_density).to_string();
@@ -123,7 +124,21 @@ impl Settings {
             .default_model
             .as_deref()
             .and_then(normalize_model_name);
+        settings.apply_env_overrides();
         Ok(settings)
+    }
+
+    /// Apply terminal/environment safety overrides that should win over disk
+    /// settings for the current process.
+    pub fn apply_env_overrides(&mut self) {
+        if env_truthy("NO_ANIMATIONS") || detected_motion_sensitive_terminal() {
+            self.low_motion = true;
+            self.fancy_animations = false;
+        }
+        if detected_legacy_windows_console_host() {
+            self.low_motion = true;
+            self.fancy_animations = false;
+        }
     }
 
     /// Save settings to disk
@@ -368,6 +383,51 @@ fn parse_bool(value: &str) -> Result<bool> {
     }
 }
 
+fn env_truthy(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .is_some_and(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+}
+
+fn detected_motion_sensitive_terminal() -> bool {
+    let term_program = std::env::var("TERM_PROGRAM")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    matches!(term_program.as_str(), "vscode" | "ghostty" | "termius")
+        || std::env::var_os("SSH_CLIENT").is_some()
+        || std::env::var_os("SSH_TTY").is_some()
+        || std::env::var_os("TILIX_ID").is_some()
+        || std::env::var_os("TERMINATOR_UUID").is_some()
+}
+
+pub fn detected_legacy_windows_console_host() -> bool {
+    cfg!(windows)
+        && legacy_windows_console_host_env([
+            std::env::var_os("WT_SESSION"),
+            std::env::var_os("ConEmuPID"),
+            std::env::var_os("ANSICON"),
+            std::env::var_os("WEZTERM_EXECUTABLE"),
+            std::env::var_os("WEZTERM_PANE"),
+            std::env::var_os("ALACRITTY_WINDOW_ID"),
+            std::env::var_os("TERM_PROGRAM"),
+            std::env::var_os("TERM"),
+        ])
+}
+
+pub fn detected_modern_windows_terminal() -> bool {
+    cfg!(windows) && !detected_legacy_windows_console_host()
+}
+
+fn legacy_windows_console_host_env<I, S>(markers: I) -> bool
+where
+    I: IntoIterator<Item = Option<S>>,
+    S: AsRef<OsStr>,
+{
+    markers
+        .into_iter()
+        .all(|value| value.is_none_or(|value| value.as_ref().is_empty()))
+}
+
 fn normalize_mode(value: &str) -> &str {
     match value.trim().to_ascii_lowercase().as_str() {
         "edit" => "agent",
@@ -410,6 +470,33 @@ fn normalize_sidebar_focus(value: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvGuard {
+        keys: Vec<(&'static str, Option<OsString>)>,
+    }
+
+    impl EnvGuard {
+        fn new(keys: &[&'static str]) -> Self {
+            Self {
+                keys: keys.iter().map(|key| (*key, std::env::var_os(key))).collect(),
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (key, value) in &self.keys {
+                match value {
+                    Some(value) => unsafe { std::env::set_var(key, value) },
+                    None => unsafe { std::env::remove_var(key) },
+                }
+            }
+        }
+    }
 
     #[test]
     fn default_settings_preserve_v4_prefix_cache_by_default() {
@@ -458,5 +545,56 @@ mod tests {
             .set("locale", "ar")
             .expect_err("Arabic is planned, not shipped");
         assert!(err.to_string().contains("invalid locale"));
+    }
+
+    #[test]
+    fn no_animations_env_forces_low_motion() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = EnvGuard::new(&["NO_ANIMATIONS", "TERM_PROGRAM", "SSH_CLIENT", "SSH_TTY", "TILIX_ID", "TERMINATOR_UUID"]);
+        unsafe {
+            std::env::set_var("NO_ANIMATIONS", "1");
+            std::env::remove_var("TERM_PROGRAM");
+            std::env::remove_var("SSH_CLIENT");
+            std::env::remove_var("SSH_TTY");
+            std::env::remove_var("TILIX_ID");
+            std::env::remove_var("TERMINATOR_UUID");
+        }
+        let mut settings = Settings {
+            fancy_animations: true,
+            ..Settings::default()
+        };
+        settings.apply_env_overrides();
+        assert!(settings.low_motion);
+        assert!(!settings.fancy_animations);
+    }
+
+    #[test]
+    fn motion_sensitive_terminals_force_low_motion() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = EnvGuard::new(&["NO_ANIMATIONS", "TERM_PROGRAM", "SSH_CLIENT", "SSH_TTY", "TILIX_ID", "TERMINATOR_UUID"]);
+        unsafe {
+            std::env::remove_var("NO_ANIMATIONS");
+            std::env::set_var("TERM_PROGRAM", "vscode");
+            std::env::remove_var("SSH_CLIENT");
+            std::env::remove_var("SSH_TTY");
+            std::env::remove_var("TILIX_ID");
+            std::env::remove_var("TERMINATOR_UUID");
+        }
+        let mut settings = Settings {
+            fancy_animations: true,
+            ..Settings::default()
+        };
+        settings.apply_env_overrides();
+        assert!(settings.low_motion);
+        assert!(!settings.fancy_animations);
+    }
+
+    #[test]
+    fn legacy_windows_console_host_helper_tracks_markers() {
+        assert!(legacy_windows_console_host_env([None::<&OsStr>, None::<&OsStr>]));
+        assert!(!legacy_windows_console_host_env([
+            Some(OsStr::new("wt-session")),
+            None::<&OsStr>
+        ]));
     }
 }

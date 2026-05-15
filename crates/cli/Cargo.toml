@@ -14,13 +14,13 @@ path = "src/main.rs"
 anyhow.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
-xiaomimimo-agent = { path = "../agent", version = "0.6.6" }
-xiaomimimo-app-server = { path = "../app-server", version = "0.6.6" }
-xiaomimimo-config = { path = "../config", version = "0.6.6" }
-xiaomimimo-execpolicy = { path = "../execpolicy", version = "0.6.6" }
-xiaomimimo-mcp = { path = "../mcp", version = "0.6.6" }
-xiaomimimo-secrets = { path = "../secrets", version = "0.6.6" }
-xiaomimimo-state = { path = "../state", version = "0.6.6" }
+xiaomimimo-agent = { path = "../agent", version = "0.6.7" }
+xiaomimimo-app-server = { path = "../app-server", version = "0.6.7" }
+xiaomimimo-config = { path = "../config", version = "0.6.7" }
+xiaomimimo-execpolicy = { path = "../execpolicy", version = "0.6.7" }
+xiaomimimo-mcp = { path = "../mcp", version = "0.6.7" }
+xiaomimimo-secrets = { path = "../secrets", version = "0.6.7" }
+xiaomimimo-state = { path = "../state", version = "0.6.7" }
 chrono.workspace = true
 dirs.workspace = true
 serde.workspace = true

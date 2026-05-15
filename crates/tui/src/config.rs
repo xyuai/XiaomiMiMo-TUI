@@ -369,6 +369,9 @@ pub struct RetryConfig {
 pub struct TuiConfig {
     pub alternate_screen: Option<String>,
     pub mouse_capture: Option<bool>,
+    /// When true, bare Up/Down on an empty composer scrolls the transcript
+    /// instead of navigating prompt history. `None` uses the platform default.
+    pub composer_arrows_scroll: Option<bool>,
     /// Ordered list of footer items the user wants visible. `None` (the field
     /// missing from `config.toml`) means "use the built-in default order"; an
     /// empty `Some(vec![])` means "show nothing in the footer".

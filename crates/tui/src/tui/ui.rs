@@ -1,7 +1,7 @@
 //! TUI event loop and rendering logic for `XiaomiMiMo` CLI.
 
 use std::collections::HashSet;
-use std::io::{self, Stdout};
+use std::io::{self, Stdout, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -9,9 +9,10 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use crossterm::{
     event::{
-        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
-        MouseEventKind,
+        self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture,
+        EnableBracketedPaste, EnableFocusChange, EnableMouseCapture, Event,
+        KeyboardEnhancementFlags, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton,
+        MouseEvent, MouseEventKind,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -143,6 +144,11 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     let use_mouse_capture = options.use_mouse_capture;
     let use_bracketed_paste = options.use_bracketed_paste;
     enable_raw_mode()?;
+    let mut cleanup_guard = TerminalCleanupGuard::new(
+        use_alt_screen,
+        use_mouse_capture,
+        use_bracketed_paste,
+    );
     let mut stdout = io::stdout();
     if use_alt_screen {
         execute!(stdout, EnterAlternateScreen)?;
@@ -153,22 +159,7 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     if use_bracketed_paste {
         execute!(stdout, EnableBracketedPaste)?;
     }
-    // Best effort: opt into Kitty keyboard protocol escape disambiguation.
-    // Terminals that do not support it ignore the sequence; supported
-    // terminals report Alt/Esc-modified keys more reliably. We pop the flag on
-    // normal shutdown, suspend/editor handoff, and panic.
-    if let Err(err) = execute!(
-        stdout,
-        crossterm::event::PushKeyboardEnhancementFlags(
-            crossterm::event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-        )
-    ) {
-        tracing::debug!(
-            target: "kitty_keyboard",
-            ?err,
-            "PushKeyboardEnhancementFlags ignored"
-        );
-    }
+    recover_terminal_modes(&mut stdout, use_mouse_capture, use_bracketed_paste);
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
@@ -417,10 +408,8 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     // Clear crash-recovery checkpoint on normal exit so the next launch starts fresh.
     clear_checkpoint();
 
-    let _ = execute!(
-        terminal.backend_mut(),
-        crossterm::event::PopKeyboardEnhancementFlags
-    );
+    pop_keyboard_enhancement_flags(terminal.backend_mut());
+    let _ = execute!(terminal.backend_mut(), DisableFocusChange);
     disable_raw_mode()?;
     if use_alt_screen {
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
@@ -432,8 +421,44 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
         execute!(terminal.backend_mut(), DisableBracketedPaste)?;
     }
     terminal.show_cursor()?;
+    cleanup_guard.defuse();
 
     result
+}
+
+struct TerminalCleanupGuard {
+    use_alt_screen: bool,
+    use_mouse_capture: bool,
+    use_bracketed_paste: bool,
+    active: bool,
+}
+
+impl TerminalCleanupGuard {
+    fn new(use_alt_screen: bool, use_mouse_capture: bool, use_bracketed_paste: bool) -> Self {
+        Self {
+            use_alt_screen,
+            use_mouse_capture,
+            use_bracketed_paste,
+            active: true,
+        }
+    }
+
+    fn defuse(&mut self) {
+        self.active = false;
+    }
+}
+
+impl Drop for TerminalCleanupGuard {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        restore_terminal_modes(
+            self.use_alt_screen,
+            self.use_mouse_capture,
+            self.use_bracketed_paste,
+        );
+    }
 }
 
 fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
@@ -1288,6 +1313,15 @@ async fn run_event_loop(
         if event::poll(poll_timeout)? {
             let evt = event::read()?;
             app.needs_redraw = true;
+
+            if matches!(&evt, Event::FocusGained) {
+                recover_terminal_modes(
+                    terminal.backend_mut(),
+                    app.use_mouse_capture,
+                    app.use_bracketed_paste,
+                );
+                continue;
+            }
 
             // Handle bracketed paste events
             if let Event::Paste(text) = &evt {
@@ -4785,10 +4819,8 @@ fn pause_terminal(
     use_mouse_capture: bool,
     use_bracketed_paste: bool,
 ) -> Result<()> {
-    let _ = execute!(
-        terminal.backend_mut(),
-        crossterm::event::PopKeyboardEnhancementFlags
-    );
+    pop_keyboard_enhancement_flags(terminal.backend_mut());
+    let _ = execute!(terminal.backend_mut(), DisableFocusChange);
     disable_raw_mode()?;
     if use_alt_screen {
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
@@ -4812,12 +4844,7 @@ fn resume_terminal(
     if use_alt_screen {
         execute!(terminal.backend_mut(), EnterAlternateScreen)?;
     }
-    if use_mouse_capture {
-        execute!(terminal.backend_mut(), EnableMouseCapture)?;
-    }
-    if use_bracketed_paste {
-        execute!(terminal.backend_mut(), EnableBracketedPaste)?;
-    }
+    recover_terminal_modes(terminal.backend_mut(), use_mouse_capture, use_bracketed_paste);
     terminal.clear()?;
     Ok(())
 }
@@ -6426,8 +6453,69 @@ fn is_ctrl_h_backspace(key: &KeyEvent) -> bool {
         && !key.modifiers.contains(KeyModifiers::SUPER)
 }
 
-fn should_scroll_with_arrows(_app: &App) -> bool {
-    false
+fn should_scroll_with_arrows(app: &App) -> bool {
+    app.composer_arrows_scroll && app.input.trim().is_empty()
+}
+
+fn push_keyboard_enhancement_flags<W: Write>(writer: &mut W) {
+    let flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES.bits();
+    if let Err(err) = write!(writer, "\x1b[>{flags}u").and_then(|_| writer.flush()) {
+        tracing::debug!(
+            target: "kitty_keyboard",
+            ?err,
+            "PushKeyboardEnhancementFlags escape ignored"
+        );
+    }
+}
+
+pub(crate) fn pop_keyboard_enhancement_flags<W: Write>(writer: &mut W) {
+    if let Err(err) = write!(writer, "\x1b[<1u").and_then(|_| writer.flush()) {
+        tracing::debug!(
+            target: "kitty_keyboard",
+            ?err,
+            "PopKeyboardEnhancementFlags escape ignored"
+        );
+    }
+}
+
+pub(crate) fn recover_terminal_modes<W: Write>(
+    writer: &mut W,
+    use_mouse_capture: bool,
+    use_bracketed_paste: bool,
+) {
+    push_keyboard_enhancement_flags(writer);
+    let _ = execute!(writer, EnableFocusChange);
+    if use_mouse_capture {
+        let _ = execute!(writer, EnableMouseCapture);
+    }
+    if use_bracketed_paste {
+        let _ = execute!(writer, EnableBracketedPaste);
+    }
+}
+
+fn restore_terminal_modes(
+    use_alt_screen: bool,
+    use_mouse_capture: bool,
+    use_bracketed_paste: bool,
+) {
+    let mut stdout = io::stdout();
+    pop_keyboard_enhancement_flags(&mut stdout);
+    let _ = execute!(stdout, DisableFocusChange);
+    if use_bracketed_paste {
+        let _ = execute!(stdout, DisableBracketedPaste);
+    }
+    if use_mouse_capture {
+        let _ = execute!(stdout, DisableMouseCapture);
+    }
+    let _ = disable_raw_mode();
+    if use_alt_screen {
+        let _ = execute!(stdout, LeaveAlternateScreen);
+    }
+    let _ = execute!(stdout, crossterm::cursor::Show);
+}
+
+pub fn emergency_restore_terminal() {
+    restore_terminal_modes(true, true, true);
 }
 
 fn extract_reasoning_header(text: &str) -> Option<String> {
