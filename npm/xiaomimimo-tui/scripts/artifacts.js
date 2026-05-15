@@ -41,7 +41,10 @@ function executableName(base, platform) {
 
 function releaseBaseUrl(version, repo = "xyuai/XiaomiMiMo-TUI") {
   const override =
-    process.env.XIAOMIMIMO_TUI_RELEASE_BASE_URL || process.env.XIAOMIMIMO_RELEASE_BASE_URL;
+    process.env.XIAOMIMIMO_TUI_RELEASE_MIRROR ||
+    process.env.XIAOMIMIMO_RELEASE_MIRROR ||
+    process.env.XIAOMIMIMO_TUI_RELEASE_BASE_URL ||
+    process.env.XIAOMIMIMO_RELEASE_BASE_URL;
   if (override) {
     const trimmed = String(override).trim();
     return trimmed.endsWith("/") ? trimmed : `${trimmed}/`;

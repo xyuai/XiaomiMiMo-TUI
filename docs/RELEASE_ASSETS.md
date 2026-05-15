@@ -24,3 +24,22 @@ The following historical releases were audited on 2026-05-02:
 `npm/xiaomimimo-tui/scripts/verify-release-assets.js` now also checks that
 legacy alias assets are absent and that the checksum manifest does not contain
 duplicate hashes.
+
+## Install mirrors and verification
+
+The npm installer downloads binaries from the release matching the package
+version and verifies every downloaded asset against
+`xiaomimimo-artifacts-sha256.txt` before it is promoted into `bin/downloads`.
+
+Set `XIAOMIMIMO_TUI_RELEASE_MIRROR` (or `XIAOMIMIMO_RELEASE_MIRROR`) to point
+the installer at a mirror directory that contains the same canonical asset
+names and checksum manifest. The older `*_RELEASE_BASE_URL` variables remain
+supported for compatibility.
+
+`postinstall` is optional and bounded by `XIAOMIMIMO_TUI_DOWNLOAD_TIMEOUT_MS`
+or `XIAOMIMIMO_DOWNLOAD_TIMEOUT_MS` (default: 30000 ms). A timeout or mirror
+failure prints a warning and lets npm finish; direct runtime use retries the
+same verified download path.
+
+Release CI validates that the git tag (`vX.Y.Z`) matches both the Rust package
+version and the npm package version before uploading artifacts.

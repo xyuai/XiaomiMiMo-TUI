@@ -28,6 +28,22 @@ function resolveRepo() {
   return process.env.XIAOMIMIMO_TUI_GITHUB_REPO || process.env.XIAOMIMIMO_GITHUB_REPO || "xyuai/XiaomiMiMo-TUI";
 }
 
+function resolveTimeoutMs() {
+  const configured =
+    process.env.XIAOMIMIMO_TUI_DOWNLOAD_TIMEOUT_MS ||
+    process.env.XIAOMIMIMO_DOWNLOAD_TIMEOUT_MS ||
+    "30000";
+  const parsed = Number.parseInt(String(configured).trim(), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 30000;
+  }
+  return Math.max(parsed, 1000);
+}
+
+function isOptionalInstall(argv = process.argv) {
+  return argv.includes("--optional") || process.env.XIAOMIMIMO_TUI_OPTIONAL_INSTALL === "1";
+}
+
 function binaryPaths() {
   const { xiaomimimo, tui } = detectBinaryNames();
   const releaseDir = releaseBinaryDirectory();
@@ -43,10 +59,10 @@ function binaryPaths() {
   };
 }
 
-async function httpGet(url) {
+async function httpGet(url, timeoutMs = resolveTimeoutMs()) {
   const client = url.startsWith("https:") ? https : http;
   const response = await new Promise((resolve, reject) => {
-    client.get(url, (res) => {
+    const request = client.get(url, (res) => {
       const status = res.statusCode || 0;
       if (status >= 300 && status < 400 && res.headers.location) {
         resolve({ redirect: res.headers.location, response: null });
@@ -57,24 +73,28 @@ async function httpGet(url) {
         return;
       }
       resolve({ redirect: null, response: res });
-    }).on("error", reject);
+    });
+    request.setTimeout(timeoutMs, () => {
+      request.destroy(new Error(`Request timed out after ${timeoutMs}ms: ${url}`));
+    });
+    request.on("error", reject);
   });
   return response;
 }
 
-async function download(url, destination) {
-  const resolved = await httpGet(url);
+async function download(url, destination, timeoutMs = resolveTimeoutMs()) {
+  const resolved = await httpGet(url, timeoutMs);
   if (resolved.redirect) {
-    return download(resolved.redirect, destination);
+    return download(resolved.redirect, destination, timeoutMs);
   }
   await mkdir(path.dirname(destination), { recursive: true });
   await pipeline(resolved.response, createWriteStream(destination));
 }
 
-async function downloadText(url) {
-  const resolved = await httpGet(url);
+async function downloadText(url, timeoutMs = resolveTimeoutMs()) {
+  const resolved = await httpGet(url, timeoutMs);
   if (resolved.redirect) {
-    return downloadText(resolved.redirect);
+    return downloadText(resolved.redirect, timeoutMs);
   }
   const chunks = [];
   resolved.response.setEncoding("utf8");
@@ -131,11 +151,11 @@ async function verifyChecksum(filePath, assetName, checksums) {
   }
 }
 
-async function loadChecksums(version, repo) {
-  return parseChecksumManifest(await downloadText(checksumManifestUrl(version, repo)));
+async function loadChecksums(version, repo, timeoutMs) {
+  return parseChecksumManifest(await downloadText(checksumManifestUrl(version, repo), timeoutMs));
 }
 
-async function ensureBinary(targetPath, assetName, version, repo, getChecksums) {
+async function ensureBinary(targetPath, assetName, version, repo, getChecksums, timeoutMs) {
   const marker = `${targetPath}.version`;
   const downloadIfNeeded =
     process.env.XIAOMIMIMO_TUI_FORCE_DOWNLOAD === "1" || process.env.XIAOMIMIMO_FORCE_DOWNLOAD === "1";
@@ -151,7 +171,7 @@ async function ensureBinary(targetPath, assetName, version, repo, getChecksums) 
   const checksums = await getChecksums();
   const url = releaseAssetUrl(assetName, version, repo);
   const destination = `${targetPath}.${process.pid}.${Date.now()}.download`;
-  await download(url, destination);
+  await download(url, destination, timeoutMs);
   try {
     await verifyChecksum(destination, assetName, checksums);
   } catch (error) {
@@ -174,19 +194,20 @@ async function run() {
   const repo = resolveRepo();
   const paths = binaryPaths();
   const releaseDir = releaseBinaryDirectory();
+  const timeoutMs = resolveTimeoutMs();
   await mkdir(releaseDir, { recursive: true });
 
   let checksumsPromise;
   const getChecksums = () => {
     if (!checksumsPromise) {
-      checksumsPromise = loadChecksums(version, repo);
+      checksumsPromise = loadChecksums(version, repo, timeoutMs);
     }
     return checksumsPromise;
   };
 
   await Promise.all([
-    ensureBinary(paths.xiaomimimo.target, paths.xiaomimimo.asset, version, repo, getChecksums),
-    ensureBinary(paths.tui.target, paths.tui.asset, version, repo, getChecksums),
+    ensureBinary(paths.xiaomimimo.target, paths.xiaomimimo.asset, version, repo, getChecksums, timeoutMs),
+    ensureBinary(paths.tui.target, paths.tui.asset, version, repo, getChecksums, timeoutMs),
   ]);
 }
 
@@ -204,11 +225,18 @@ async function getBinaryPath(name) {
 
 module.exports = {
   getBinaryPath,
+  isOptionalInstall,
+  resolveTimeoutMs,
   run,
 };
 
 if (require.main === module) {
   run().catch((error) => {
+    if (isOptionalInstall()) {
+      console.warn(`xiaomimimo-tui optional install skipped: ${error.message}`);
+      console.warn("The package command will try again when first used, or you can rerun npm install.");
+      process.exit(0);
+    }
     console.error("xiaomimimo-tui install failed:", error.message);
     process.exit(1);
   });

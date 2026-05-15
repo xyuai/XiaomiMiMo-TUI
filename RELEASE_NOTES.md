@@ -1,13 +1,32 @@
+# XiaomiMiMo-TUI v0.7.0
+
+## 更新内容
+- 为工作区快照增加预检上限：覆盖 entry 总数、总字节数、单文件字节数与单 entry 路径长度，并在 side repo 初始化前和每次 staging 前执行。
+- npm 安装下载增加超时控制；`postinstall` 变为可降级流程，失败时快速提示 warning，运行时仍可重试 verified download。
+- Release 下载支持 `XIAOMIMIMO_TUI_RELEASE_MIRROR` / `XIAOMIMIMO_RELEASE_MIRROR`，并继续对下载产物执行 SHA256 校验。
+- 新增 TUI build script，监听 `.git/HEAD`、branch ref、packed refs 与 GitHub release ref 环境变化。
+- Release CI 在上传产物前校验 Rust 与 npm package version 是否和 `vX.Y.Z` tag 一致。
+
+## 验证
+- `cargo check -p xiaomimimo-tui`
+- `cargo test -p xiaomimimo-tui snapshot::repo -- --nocapture`
+- `node -c npm/xiaomimimo-tui/scripts/install.js`
+- `node -e "const i=require('./npm/xiaomimimo-tui/scripts/install'); console.log(i.resolveTimeoutMs(), i.isOptionalInstall(['node','install.js','--optional']))"`
+- `node -e "const a=require('./npm/xiaomimimo-tui/scripts/artifacts'); process.env.XIAOMIMIMO_TUI_RELEASE_MIRROR='https://mirror.example/releases/v0.7.0'; console.log(a.releaseBaseUrl('0.7.0'))"`
+- `git diff --check`
+
+---
+
 # XiaomiMiMo-TUI v0.6.9
 
-## Changes
-- Added workspace/global user slash commands from `.xiaomimimo/commands` and `~/.xiaomimimo/commands`; workspace commands take precedence and can override built-ins.
-- Slash completion now includes user commands alongside built-in commands.
-- `@` mention completion can include explicitly typed hidden/config paths such as `.xiaomimimo/...`, even when ignored.
-- Skills discovery now checks workspace and global locations with workspace precedence across TUI, palette, runtime API, and prompts.
-- Active skill instructions now use a bounded, stable context block for long skill files.
+## 更新内容
+- 新增工作区与全局用户 slash commands，支持 `.xiaomimimo/commands` 与 `~/.xiaomimimo/commands`；工作区命令优先并可覆盖内置命令。
+- Slash 补全现在会同时显示用户命令和内置命令。
+- `@` mention 补全支持显式输入的隐藏/配置路径，例如 `.xiaomimimo/...`，即使这些路径被 ignore。
+- Skills 发现扩展到工作区与全局位置，并在 TUI、palette、runtime API 与 prompts 中保持工作区优先级。
+- Active skill instructions 使用有界且稳定的上下文块，长 skill 文件不会挤掉关键工作区技能说明。
 
-## Verification
+## 验证
 - `cargo check -p xiaomimimo-tui`
 - `cargo test -p xiaomimimo-tui commands -- --nocapture`
 - `cargo test -p xiaomimimo-tui skills -- --nocapture`
@@ -19,14 +38,14 @@
 
 # XiaomiMiMo-TUI v0.6.8
 
-## Changes
-- Provider-aware request building: `thinking`, `reasoning_content`, and tool schema fields now follow active provider capability.
-- Generic OpenAI-compatible backends strip non-standard tool metadata by default and keep `strict` only when supported.
-- Fireworks now uses OpenAI-compatible `reasoning_effort` instead of top-level `thinking`.
-- `XIAOMIMIMO_BASE_URL` is applied to the active provider config so provider defaults no longer override it.
-- `/provider` and `/model` selections persist per provider; custom OpenAI-compatible model IDs are preserved verbatim.
+## 更新内容
+- 按 Provider 能力构造请求：`thinking`、`reasoning_content` 与工具 schema 字段会跟随当前 Provider 能力下发。
+- Generic OpenAI-compatible 后端默认剥离非标准工具元数据，仅在支持时保留 `strict`。
+- Fireworks 改用 OpenAI-compatible 的 `reasoning_effort`，不再发送顶层 `thinking`。
+- `XIAOMIMIMO_BASE_URL` 会应用到当前 Provider 配置，避免被默认配置覆盖。
+- `/provider` 与 `/model` 选择按 Provider 持久化；自定义 OpenAI-compatible 模型 ID 会按原样保留。
 
-## Verification
+## 验证
 - `cargo check --workspace`
 - `cargo test -p xiaomimimo-tui client -- --nocapture`
 - `cargo test -p xiaomimimo-tui config -- --nocapture`
@@ -38,16 +57,14 @@
 
 # XiaomiMiMo-TUI v0.6.7
 
-## ????
+## 更新内容
+- 统一终端状态恢复：panic、Ctrl+C、SIGTERM、早退路径都会尽量恢复 raw mode、鼠标捕获、bracketed paste 与 alt screen。
+- 改进 Windows 终端兼容性：Windows Terminal 可自动启用鼠标捕获，旧版控制台保持保守默认。
+- 新增 `tui.composer_arrows_scroll`，输入框多行时 Up/Down 可滚动内容，Windows 场景默认更稳。
+- 增加 low-motion 自动检测，兼容 `NO_ANIMATIONS`、VS Code、Ghostty、Termius、SSH、Tilix、Terminator 等环境。
+- 修复 diff、pager 与 Markdown 渲染中的长 CJK、长无空格文本、表格、OSC 8 链接、粘贴和 Home/End 行为问题。
 
-- ???????panic?Ctrl+C?SIGTERM????????????????? raw mode??????bracketed paste?alt screen?????????????
-- ?? Windows ??????? Windows ???????????????????????????
-- ?? `tui.composer_arrows_scroll`???????? Up/Down ?????????Windows ??????????????
-- ?? low-motion ???? `NO_ANIMATIONS`?VS Code?Ghostty?Termius?SSH?Tilix?Terminator ??? Windows ????
-- ?? diff?pager ? Markdown ?? CJK/?????????Markdown ??????????????????
-
-## ??
-
+## 验证
 - `cargo check --workspace`
 - `cargo test -p xiaomimimo-tui settings -- --nocapture`
 - `cargo test -p xiaomimimo-tui tui::diff_render -- --nocapture`

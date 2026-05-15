@@ -13,6 +13,7 @@
 //! directory".
 
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output};
@@ -46,6 +47,59 @@ pub struct Snapshot {
 pub struct SnapshotRepo {
     git_dir: PathBuf,
     work_tree: PathBuf,
+    limits: SnapshotLimits,
+}
+
+/// Conservative bounds used before snapshot side-repos are initialized and
+/// again before each snapshot is staged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SnapshotLimits {
+    /// Maximum number of filesystem entries scanned below the workspace root.
+    pub max_entries: usize,
+    /// Maximum aggregate byte size of regular files and symlinks.
+    pub max_total_bytes: u64,
+    /// Maximum byte size of a single regular file or symlink entry.
+    pub max_file_bytes: u64,
+    /// Maximum UTF-8-lossy byte length of a single relative entry path.
+    pub max_entry_path_bytes: usize,
+}
+
+impl Default for SnapshotLimits {
+    fn default() -> Self {
+        Self {
+            max_entries: 75_000,
+            max_total_bytes: 1024 * 1024 * 1024,
+            max_file_bytes: 32 * 1024 * 1024,
+            max_entry_path_bytes: 4096,
+        }
+    }
+}
+
+impl SnapshotLimits {
+    fn from_env() -> Self {
+        let defaults = Self::default();
+        Self {
+            max_entries: env_usize("XIAOMIMIMO_SNAPSHOT_MAX_ENTRIES", defaults.max_entries),
+            max_total_bytes: env_u64(
+                "XIAOMIMIMO_SNAPSHOT_MAX_TOTAL_BYTES",
+                defaults.max_total_bytes,
+            ),
+            max_file_bytes: env_u64(
+                "XIAOMIMIMO_SNAPSHOT_MAX_FILE_BYTES",
+                defaults.max_file_bytes,
+            ),
+            max_entry_path_bytes: env_usize(
+                "XIAOMIMIMO_SNAPSHOT_MAX_ENTRY_PATH_BYTES",
+                defaults.max_entry_path_bytes,
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SnapshotScan {
+    pub entries: usize,
+    pub total_bytes: u64,
 }
 
 impl SnapshotRepo {
@@ -58,10 +112,18 @@ impl SnapshotRepo {
     ///    the user's global git identity (we don't want our snapshots to
     ///    look like they came from the user).
     pub fn open_or_init(workspace: &Path) -> io::Result<Self> {
+        Self::open_or_init_with_limits(workspace, SnapshotLimits::from_env())
+    }
+
+    pub(crate) fn open_or_init_with_limits(
+        workspace: &Path,
+        limits: SnapshotLimits,
+    ) -> io::Result<Self> {
         let work_tree = workspace
             .canonicalize()
             .unwrap_or_else(|_| workspace.to_path_buf());
 
+        preflight_workspace_snapshot(&work_tree, limits)?;
         let _ = ensure_snapshot_dir(&work_tree)?;
         let git_dir = snapshot_git_dir(&work_tree);
 
@@ -106,7 +168,11 @@ impl SnapshotRepo {
             let _ = run_git(&git_dir, &work_tree, &["config", "core.autocrlf", "false"]);
         }
 
-        Ok(Self { git_dir, work_tree })
+        Ok(Self {
+            git_dir,
+            work_tree,
+            limits,
+        })
     }
 
     /// Take a snapshot of the current working tree.
@@ -118,6 +184,7 @@ impl SnapshotRepo {
     ///
     /// Returns the snapshot's commit SHA.
     pub fn snapshot(&self, label: &str) -> io::Result<SnapshotId> {
+        preflight_workspace_snapshot(&self.work_tree, self.limits)?;
         // Stage every tracked + untracked path the workspace exposes.
         // `--all` here means `add` + `update` + `remove` — the same set
         // `git status` would show.
@@ -407,6 +474,98 @@ fn io_other(msg: impl Into<String>) -> io::Error {
     io::Error::other(msg.into())
 }
 
+fn env_usize(name: &str, default: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
+}
+
+fn env_u64(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
+}
+
+pub(crate) fn preflight_workspace_snapshot(
+    work_tree: &Path,
+    limits: SnapshotLimits,
+) -> io::Result<SnapshotScan> {
+    let mut scan = SnapshotScan {
+        entries: 0,
+        total_bytes: 0,
+    };
+    let walker = ignore::WalkBuilder::new(work_tree)
+        .hidden(false)
+        .git_ignore(true)
+        .git_exclude(true)
+        .parents(true)
+        .ignore(true)
+        .add_custom_ignore_filename(".xiaomimimoignore")
+        .filter_entry(|entry| entry.file_name() != OsStr::new(".git"))
+        .build();
+
+    for result in walker {
+        let entry =
+            result.map_err(|error| io_other(format!("snapshot preflight failed: {error}")))?;
+        let path = entry.path();
+        if path == work_tree {
+            continue;
+        }
+
+        let rel = path.strip_prefix(work_tree).unwrap_or(path);
+        scan.entries = scan.entries.saturating_add(1);
+        if scan.entries > limits.max_entries {
+            return Err(io_other(format!(
+                "snapshot workspace too large: {} entries exceeds limit {}. \
+                 Set XIAOMIMIMO_SNAPSHOT_MAX_ENTRIES to override.",
+                scan.entries, limits.max_entries
+            )));
+        }
+
+        let path_bytes = rel.to_string_lossy().len();
+        if path_bytes > limits.max_entry_path_bytes {
+            return Err(io_other(format!(
+                "snapshot entry path too long: {} bytes for {} exceeds limit {}. \
+                 Set XIAOMIMIMO_SNAPSHOT_MAX_ENTRY_PATH_BYTES to override.",
+                path_bytes,
+                rel.display(),
+                limits.max_entry_path_bytes
+            )));
+        }
+
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if metadata.is_dir() {
+            continue;
+        }
+        let size = metadata.len();
+        if size > limits.max_file_bytes {
+            return Err(io_other(format!(
+                "snapshot file too large: {} is {} bytes, limit {}. \
+                 Set XIAOMIMIMO_SNAPSHOT_MAX_FILE_BYTES to override.",
+                rel.display(),
+                size,
+                limits.max_file_bytes
+            )));
+        }
+        scan.total_bytes = scan.total_bytes.saturating_add(size);
+        if scan.total_bytes > limits.max_total_bytes {
+            return Err(io_other(format!(
+                "snapshot workspace too large: {} bytes exceeds limit {}. \
+                 Set XIAOMIMIMO_SNAPSHOT_MAX_TOTAL_BYTES to override.",
+                scan.total_bytes, limits.max_total_bytes
+            )));
+        }
+    }
+
+    Ok(scan)
+}
+
 fn parse_nul_paths(bytes: &[u8]) -> HashSet<PathBuf> {
     bytes
         .split(|b| *b == 0)
@@ -649,6 +808,78 @@ mod tests {
             !names.contains("ignored.txt"),
             "ignored.txt should not be in snapshot: {names}",
         );
+    }
+
+    #[test]
+    fn preflight_rejects_too_many_entries_before_side_repo_init() {
+        let tmp = tempdir().unwrap();
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join("a.txt"), b"a").unwrap();
+        std::fs::write(workspace.join("b.txt"), b"b").unwrap();
+        let _home = scoped_home(tmp.path());
+
+        let err = match SnapshotRepo::open_or_init_with_limits(
+            &workspace,
+            SnapshotLimits {
+                max_entries: 1,
+                ..SnapshotLimits::default()
+            },
+        ) {
+            Ok(_) => panic!("workspace should exceed entry limit"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains("snapshot workspace too large"),
+            "{err}"
+        );
+        assert!(
+            !snapshot_git_dir(&workspace).exists(),
+            "side repo should not be initialized after preflight rejection",
+        );
+    }
+
+    #[test]
+    fn preflight_rejects_single_large_file() {
+        let tmp = tempdir().unwrap();
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join("large.bin"), [0_u8; 8]).unwrap();
+
+        let err = preflight_workspace_snapshot(
+            &workspace,
+            SnapshotLimits {
+                max_file_bytes: 4,
+                ..SnapshotLimits::default()
+            },
+        )
+        .expect_err("single file should exceed limit");
+
+        assert!(err.to_string().contains("snapshot file too large"), "{err}");
+    }
+
+    #[test]
+    fn snapshot_rechecks_limits_before_staging() {
+        let tmp = tempdir().unwrap();
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join("small.txt"), b"ok").unwrap();
+        let _home = scoped_home(tmp.path());
+        let repo = SnapshotRepo::open_or_init_with_limits(
+            &workspace,
+            SnapshotLimits {
+                max_file_bytes: 4,
+                ..SnapshotLimits::default()
+            },
+        )
+        .expect("open_or_init");
+
+        std::fs::write(workspace.join("large.bin"), [0_u8; 8]).unwrap();
+        let err = repo
+            .snapshot("pre-turn:1")
+            .expect_err("snapshot should re-check file size");
+        assert!(err.to_string().contains("snapshot file too large"), "{err}");
     }
 
     #[test]
